@@ -1,16 +1,3 @@
---[[
-    ====================================================================================================
-                                      🐙 IGNACIO GUI V9.0 THE GOD SCRIPT 🐙
-                                       DESARROLLADOR: PulpoNot_Found
-    ====================================================================================================
-    [CORRECCIONES V9.0]
-    - FIX CRÍTICO: Todas las ventanas (Menú Principal y Panel TK) son arrastrables (Draggable) en PC y Móvil.
-    - FIX CRÍTICO: El Raycast del Crosshair ya no choca con sus propias partes fantasmas.
-    - FIX CRÍTICO: Lógica de Fling reescrita. Ahora garantiza impacto y rotación extrema en el objetivo.
-    - FLY MÓVIL: Vuelo direccional por cámara y joystick (Infinite Yield Style).
-    - INTRO: Detección de género y AvatarBust circular restaurados.
-    ====================================================================================================
-]]
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -704,5 +691,6 @@ end)
 runIntro(function()
     handleMenuToggle()
 end)
+
 
 print("🐙 PULPO_NOT_FOUND V9.0 | SISTEMA DRAGGABLE Y FLING FIX LOADED")
