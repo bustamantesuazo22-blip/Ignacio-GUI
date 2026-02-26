@@ -1,4 +1,4 @@
-dev:PulpoNot_Found
+
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
