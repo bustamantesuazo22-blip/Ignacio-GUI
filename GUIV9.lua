@@ -1,0 +1,708 @@
+--[[
+    ====================================================================================================
+                                      🐙 IGNACIO GUI V9.0 THE GOD SCRIPT 🐙
+                                       DESARROLLADOR: PulpoNot_Found
+    ====================================================================================================
+    [CORRECCIONES V9.0]
+    - FIX CRÍTICO: Todas las ventanas (Menú Principal y Panel TK) son arrastrables (Draggable) en PC y Móvil.
+    - FIX CRÍTICO: El Raycast del Crosshair ya no choca con sus propias partes fantasmas.
+    - FIX CRÍTICO: Lógica de Fling reescrita. Ahora garantiza impacto y rotación extrema en el objetivo.
+    - FLY MÓVIL: Vuelo direccional por cámara y joystick (Infinite Yield Style).
+    - INTRO: Detección de género y AvatarBust circular restaurados.
+    ====================================================================================================
+]]
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local cam = Workspace.CurrentCamera
+
+-- Variables físicas y de estado
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local menuOpen = false
+
+-- Estados de módulos
+local flyActive = false
+local flySpeed = 65
+local ringActive = false
+local ringRadius = 50
+local espActive = false
+local tkPanelActive = false
+local headlessActive = false
+
+local connections = {fly = nil, ring = nil, esp = nil, tk = nil}
+
+-- ==========================================
+-- [ SECCIÓN 1: SISTEMA UNIVERSAL DE ARRASTRE (DRAGGABLE) ]
+-- ==========================================
+local function makeDraggable(guiObject)
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    guiObject.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = guiObject.Position
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    guiObject.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            guiObject.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+-- ==========================================
+-- [ SECCIÓN 2: CONFIGURACIÓN VISUAL ADAPTATIVA ]
+-- ==========================================
+local UIConfig = {}
+if isMobile then
+    UIConfig.Type = "Frame"
+    UIConfig.MainSize = UDim2.fromScale(0.65, 0.60)
+    UIConfig.BtnSize = UDim2.fromScale(0.92, 0.12)
+    UIConfig.SliderContSize = UDim2.fromScale(0.92, 0.14)
+    UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.15)
+    UIConfig.TkSize = UDim2.fromScale(0.48, 0.45)
+    UIConfig.ScrollThick = 4
+else
+    UIConfig.Type = "CanvasGroup"
+    UIConfig.MainSize = UDim2.fromScale(0.35, 0.70)
+    UIConfig.BtnSize = UDim2.fromScale(0.85, 0.07)
+    UIConfig.SliderContSize = UDim2.fromScale(0.85, 0.10)
+    UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.30)
+    UIConfig.TkSize = UDim2.fromScale(0.30, 0.35)
+    UIConfig.ScrollThick = 0
+end
+
+-- ==========================================
+-- [ SECCIÓN 3: LIMPIEZA DE MEMORIA ]
+-- ==========================================
+pcall(function()
+    local oldGUIs = {"IGNACIO_GUI_V13", "IGNACIO_GUI_V9", "TK_GUI_V9", "MOBILE_CONTROLS", "PULPO_INTRO"}
+    for _, name in pairs(oldGUIs) do
+        local obj = CoreGui:FindFirstChild(name) or player.PlayerGui:FindFirstChild(name)
+        if obj then obj:Destroy() end
+    end
+    for _, obj in pairs(Lighting:GetChildren()) do
+        if obj.Name == "IGNACIO_BLUR" then obj:Destroy() end
+    end
+end)
+
+local targetParent = (pcall(function() return CoreGui.Name end)) and CoreGui or player.PlayerGui
+
+-- ==========================================
+-- [ SECCIÓN 4: INTRODUCCIÓN CINEMATOGRÁFICA ]
+-- ==========================================
+local function runIntro(onComplete)
+    local introLayer = Instance.new("ScreenGui", targetParent)
+    introLayer.Name = "PULPO_INTRO"
+    introLayer.IgnoreGuiInset = true 
+    introLayer.DisplayOrder = 9999
+
+    local bg = Instance.new("Frame", introLayer)
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(5, 5, 8)
+    bg.BackgroundTransparency = 1 
+
+    local centerContainer = Instance.new("Frame", bg)
+    centerContainer.Size = UDim2.fromOffset(350, 350)
+    centerContainer.Position = UDim2.fromScale(0.5, 0.5)
+    centerContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+    centerContainer.BackgroundTransparency = 1
+
+    local pfp = Instance.new("ImageLabel", centerContainer)
+    pfp.Size = UDim2.fromOffset(140, 140)
+    pfp.Position = UDim2.fromScale(0.5, 0.35)
+    pfp.AnchorPoint = Vector2.new(0.5, 0.5)
+    pfp.BackgroundTransparency = 1
+    pfp.ImageTransparency = 1
+    pfp.Image = "rbxassetid://0"
+    
+    task.spawn(function()
+        local success, thumb = pcall(function()
+            return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.AvatarBust, Enum.ThumbnailSize.Size420x420)
+        end)
+        if success and thumb then pfp.Image = thumb end
+    end)
+    
+    Instance.new("UICorner", pfp).CornerRadius = UDim.new(1, 0)
+    local pfpStroke = Instance.new("UIStroke", pfp)
+    pfpStroke.Thickness = 3
+    pfpStroke.Color = Color3.fromRGB(200, 220, 255)
+    pfpStroke.Transparency = 1
+
+    local authorTxt = Instance.new("TextLabel", centerContainer)
+    authorTxt.Size = UDim2.fromScale(1, 0.2)
+    authorTxt.Position = UDim2.fromScale(0.5, 0.7)
+    authorTxt.AnchorPoint = Vector2.new(0.5, 0.5)
+    authorTxt.BackgroundTransparency = 1
+    authorTxt.Text = "Made by PulpoNot_Found"
+    authorTxt.TextColor3 = Color3.new(1, 1, 1)
+    authorTxt.Font = Enum.Font.GothamBlack
+    authorTxt.TextScaled = true
+    authorTxt.TextTransparency = 1
+
+    local greeting = "Hola, "
+    pcall(function()
+        local data = HttpService:JSONDecode(game:HttpGet("https://users.roblox.com/v1/users/" .. player.UserId))
+        if data.gender == 2 then greeting = "Bienvenido, "
+        elseif data.gender == 3 then greeting = "Bienvenida, " end
+    end)
+
+    local userTxt = Instance.new("TextLabel", centerContainer)
+    userTxt.Size = UDim2.fromScale(1, 0.15)
+    userTxt.Position = UDim2.fromScale(0.5, 0.9)
+    userTxt.AnchorPoint = Vector2.new(0.5, 0.5)
+    userTxt.BackgroundTransparency = 1
+    userTxt.Text = greeting .. player.DisplayName
+    userTxt.TextColor3 = Color3.fromRGB(150, 180, 255)
+    userTxt.Font = Enum.Font.GothamSemibold
+    userTxt.TextScaled = true
+    userTxt.TextTransparency = 1
+
+    local tIn = TweenInfo.new(1.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    TweenService:Create(bg, tIn, {BackgroundTransparency = 0.1}):Play()
+    TweenService:Create(pfp, tIn, {ImageTransparency = 0}):Play()
+    TweenService:Create(pfpStroke, tIn, {Transparency = 0}):Play()
+    TweenService:Create(authorTxt, tIn, {TextTransparency = 0}):Play()
+    TweenService:Create(userTxt, tIn, {TextTransparency = 0}):Play()
+
+    task.wait(3.5)
+
+    local tOut = TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
+    TweenService:Create(bg, tOut, {BackgroundTransparency = 1}):Play()
+    TweenService:Create(pfp, tOut, {ImageTransparency = 1}):Play()
+    TweenService:Create(pfpStroke, tOut, {Transparency = 1}):Play()
+    TweenService:Create(authorTxt, tOut, {TextTransparency = 1}):Play()
+    TweenService:Create(userTxt, tOut, {TextTransparency = 1}):Play()
+
+    task.wait(1)
+    introLayer:Destroy()
+    if onComplete then onComplete() end
+end
+
+-- ==========================================
+-- [ SECCIÓN 5: GUI PRINCIPAL Y BLUR ]
+-- ==========================================
+local mainLayer = Instance.new("ScreenGui", targetParent)
+mainLayer.Name = "IGNACIO_GUI_V9"
+mainLayer.IgnoreGuiInset = true 
+
+local menuBase = Instance.new(UIConfig.Type, mainLayer)
+menuBase.Size = UIConfig.MainSize
+menuBase.Position = UDim2.fromScale(0.5, 0.5)
+menuBase.AnchorPoint = Vector2.new(0.5, 0.5) 
+menuBase.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+menuBase.Visible = false 
+menuBase.Active = true
+
+if isMobile then
+    menuBase.BackgroundTransparency = 0.15
+else
+    menuBase.BackgroundTransparency = 0.25
+    menuBase.GroupTransparency = 1
+end
+
+-- HACER EL MENÚ PRINCIPAL ARRASTRABLE
+makeDraggable(menuBase)
+
+Instance.new("UICorner", menuBase).CornerRadius = UDim.new(0, 20)
+local menuStroke = Instance.new("UIStroke", menuBase)
+menuStroke.Thickness = 2
+menuStroke.Color = Color3.fromRGB(150, 180, 255)
+menuStroke.Transparency = 0
+
+local zoomScale = Instance.new("UIScale", menuBase)
+zoomScale.Scale = isMobile and 1 or 0.85
+
+local scroll = Instance.new("ScrollingFrame", menuBase)
+scroll.Size = UDim2.fromScale(1, 0.9)
+scroll.Position = UDim2.fromScale(0, 0.1)
+scroll.BackgroundTransparency = 1 
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = UIConfig.ScrollThick
+scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y 
+
+local scrollLayout = Instance.new("UIListLayout", scroll)
+scrollLayout.Padding = UDim.new(0, 12)
+scrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
+scrollLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local titleHeader = Instance.new("TextLabel", menuBase)
+titleHeader.Size = UDim2.fromScale(1, 0.1)
+titleHeader.BackgroundTransparency = 1
+titleHeader.Text = "IGNACIO V9"
+titleHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleHeader.TextScaled = true
+titleHeader.Font = Enum.Font.GothamBlack
+
+local bgBlur = Instance.new("BlurEffect", Lighting)
+bgBlur.Name = "IGNACIO_BLUR"
+bgBlur.Size = 0 
+
+local function handleMenuToggle()
+    menuOpen = not menuOpen
+    if isMobile then
+        menuBase.Visible = menuOpen
+        bgBlur.Size = menuOpen and 15 or 0
+    else
+        local tInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        if menuOpen then
+            menuBase.Visible = true
+            TweenService:Create(menuBase, tInfo, {GroupTransparency = 0}):Play()
+            TweenService:Create(zoomScale, tInfo, {Scale = 1}):Play()
+            TweenService:Create(bgBlur, tInfo, {Size = 18}):Play()
+        else
+            local hide = TweenService:Create(menuBase, tInfo, {GroupTransparency = 1})
+            TweenService:Create(zoomScale, tInfo, {Scale = 0.85}):Play()
+            TweenService:Create(bgBlur, tInfo, {Size = 0}):Play()
+            hide:Play()
+            task.spawn(function()
+                hide.Completed:Wait()
+                if not menuOpen then menuBase.Visible = false end
+            end)
+        end
+    end
+end
+
+-- ==========================================
+-- [ SECCIÓN 6: LÓGICA DE VUELO (IY MOBILE) ]
+-- ==========================================
+local bvFly, bgFly
+local function startFlight()
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    hum.PlatformStand = true
+    bvFly = Instance.new("BodyVelocity", root)
+    bvFly.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bvFly.Velocity = Vector3.zero
+    bgFly = Instance.new("BodyGyro", root)
+    bgFly.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bgFly.P = 15000
+
+    connections.fly = RunService.RenderStepped:Connect(function()
+        bgFly.CFrame = cam.CFrame
+        local finalDirection = Vector3.zero
+        
+        if isMobile then
+            local inputDir = hum.MoveDirection
+            if inputDir.Magnitude > 0 then
+                local camLook = cam.CFrame.LookVector
+                local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
+                if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
+                local forwardFactor = inputDir:Dot(flatLook)
+                finalDirection = Vector3.new(inputDir.X, camLook.Y * forwardFactor, inputDir.Z)
+            end
+            if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+        else
+            if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
+            if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
+            if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
+            if UIS:IsKeyDown(Enum.KeyCode.D) then finalDirection = finalDirection + cam.CFrame.RightVector end
+            if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+            if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then 
+                finalDirection = finalDirection + Vector3.new(0, -1, 0) 
+            end
+        end
+        
+        if finalDirection.Magnitude > 0 then
+            bvFly.Velocity = finalDirection.Unit * flySpeed
+        else
+            bvFly.Velocity = Vector3.new(0, 0.05, 0) 
+        end
+    end)
+end
+
+local function stopFlight()
+    if connections.fly then connections.fly:Disconnect() connections.fly = nil end
+    local char = player.Character
+    if char and char:FindFirstChildOfClass("Humanoid") then char.Humanoid.PlatformStand = false end
+    if bvFly then bvFly:Destroy() bvFly = nil end
+    if bgFly then bgFly:Destroy() bgFly = nil end
+end
+
+local function toggleFly()
+    flyActive = not flyActive
+    if flyActive then startFlight() else stopFlight() end
+end
+
+-- ==========================================
+-- [ SECCIÓN 7: TORNADO & ESP ]
+-- ==========================================
+local function toggleTornado()
+    ringActive = not ringActive
+    if ringActive then
+        connections.ring = RunService.Heartbeat:Connect(function()
+            pcall(function() sethiddenproperty(player, "SimulationRadius", 1e9) end)
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            local cycle = tick() * 6
+            for _, p in pairs(Workspace:GetDescendants()) do
+                if p:IsA("BasePart") and not p.Anchored and not p:IsDescendantOf(player.Character) then
+                    local target = root.Position + Vector3.new(math.cos(cycle)*ringRadius, 4, math.sin(cycle)*ringRadius)
+                    p.Velocity = (target - p.Position).Unit * 150
+                    p.CanCollide = false
+                end
+            end
+        end)
+    else
+        if connections.ring then connections.ring:Disconnect() connections.ring = nil end
+    end
+end
+
+local function toggleESP()
+    espActive = not espActive
+    if espActive then
+        connections.esp = RunService.RenderStepped:Connect(function()
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= player and p.Character then
+                    if not p.Character:FindFirstChild("IGN_ESP_V9") then
+                        local hl = Instance.new("Highlight", p.Character)
+                        hl.Name = "IGN_ESP_V9"
+                        hl.FillTransparency = 1 
+                        hl.OutlineColor = Color3.new(1, 1, 1)
+                        hl.OutlineTransparency = 0
+                    end
+                end
+            end
+        end)
+    else
+        if connections.esp then connections.esp:Disconnect() connections.esp = nil end
+        for _, p in pairs(Players:GetPlayers()) do
+            if p.Character and p.Character:FindFirstChild("IGN_ESP_V9") then p.Character.IGN_ESP_V9:Destroy() end
+        end
+    end
+end
+
+-- ==========================================
+-- [ SECCIÓN 8: GUI DE TELEQUINESIS Y FLING CORREGIDO ]
+-- ==========================================
+local tkGui = Instance.new("ScreenGui", targetParent)
+tkGui.Name = "TK_GUI_V9"
+tkGui.IgnoreGuiInset = true 
+tkGui.Enabled = true
+
+local tkPanel = Instance.new("Frame", tkGui)
+tkPanel.Size = UIConfig.TkSize
+tkPanel.Position = isMobile and UDim2.fromScale(0.5, 0.85) or UDim2.fromScale(0.5, 0.85)
+tkPanel.AnchorPoint = Vector2.new(0.5, 1)
+tkPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+tkPanel.BackgroundTransparency = 0.15
+tkPanel.Visible = false 
+tkPanel.Active = true
+
+-- HACER EL PANEL TK ARRASTRABLE
+makeDraggable(tkPanel)
+
+Instance.new("UICorner", tkPanel).CornerRadius = UDim.new(0,16)
+Instance.new("UIStroke", tkPanel).Color = Color3.new(1, 1, 1)
+
+local tkLayout = Instance.new("UIListLayout", tkPanel)
+tkLayout.Padding = UDim.new(0, 10)
+tkLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tkLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local tkLabel = Instance.new("TextLabel", tkPanel)
+tkLabel.Size = UDim2.fromScale(1, 0.2)
+tkLabel.BackgroundTransparency = 1
+tkLabel.Text = "🔮 FLING PANEL"
+tkLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+tkLabel.TextScaled = true
+tkLabel.Font = Enum.Font.GothamBold
+
+local crosshair = Instance.new("Frame", tkGui)
+crosshair.Size = UDim2.fromOffset(8, 8)
+crosshair.Position = UDim2.fromScale(0.5, 0.5)
+crosshair.AnchorPoint = Vector2.new(0.5, 0.5)
+crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
+crosshair.Visible = false
+Instance.new("UICorner", crosshair).CornerRadius = UDim.new(1, 0)
+
+-- Contenedor para filtrar partes que crea el script (Ignorarlas en el Raycast)
+local ignoreFolder = Instance.new("Folder", Workspace)
+ignoreFolder.Name = "IGNACIO_IGNORE_FOLDER"
+
+local tkGhost, grabbedTarget
+
+local function getAimPart()
+    local cx = crosshair.AbsolutePosition.X + (crosshair.AbsoluteSize.X / 2)
+    local cy = crosshair.AbsolutePosition.Y + (crosshair.AbsoluteSize.Y / 2)
+    local ray = cam:ViewportPointToRay(cx, cy)
+    
+    -- CONFIGURACIÓN DE FILTRO AVANZADO: Ignora tu personaje y las piezas fantasma
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {player.Character, cam, ignoreFolder}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local hit = Workspace:Raycast(ray.Origin, ray.Direction * 800, params)
+    return hit and hit.Instance
+end
+
+local function stopTK()
+    if connections.tk then connections.tk:Disconnect() connections.tk = nil end
+    if tkGhost then tkGhost:Destroy() tkGhost = nil end
+    grabbedTarget = nil
+    crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
+end
+
+local function grabTK()
+    local part = getAimPart()
+    if not part or not part:IsA("BasePart") then return end
+    stopTK()
+    
+    grabbedTarget = part
+    tkGhost = part:Clone()
+    tkGhost:ClearAllChildren()
+    tkGhost.Anchored = true
+    tkGhost.CanCollide = false
+    tkGhost.Transparency = 0.5
+    tkGhost.Material = Enum.Material.ForceField
+    tkGhost.Color = Color3.fromRGB(255, 255, 255)
+    tkGhost.Parent = ignoreFolder -- Lo metemos aquí para que el Raycast lo ignore
+    
+    crosshair.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+
+    connections.tk = RunService.RenderStepped:Connect(function()
+        if tkGhost then
+            tkGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * 15)
+        end
+    end)
+end
+
+-- LÓGICA DE FLING MEJORADA PARA MAXIMA POTENCIA (PC Y MÓVIL)
+local function shootFling()
+    if not grabbedTarget then return end
+    local target = grabbedTarget
+    stopTK()
+    if target.Anchored then return end
+
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local oldCFrame = root.CFrame
+    
+    local forceV = Instance.new("BodyVelocity", root)
+    forceV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    forceV.Velocity = Vector3.zero
+
+    -- Usamos valores EXTREMOS de rotación para asegurar el Fling en cualquier servidor
+    local forceA = Instance.new("BodyAngularVelocity", root)
+    forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    forceA.AngularVelocity = Vector3.new(0, 999999999, 0)
+
+    local noclipping = RunService.Stepped:Connect(function()
+        for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then v.CanCollide = false end
+        end
+    end)
+
+    local tStart = tick()
+    local loopFling
+    loopFling = RunService.Heartbeat:Connect(function()
+        if tick() - tStart > 1 or not target.Parent then
+            loopFling:Disconnect()
+            noclipping:Disconnect()
+            forceV:Destroy()
+            forceA:Destroy()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.RotVelocity = Vector3.zero
+            root.Velocity = Vector3.zero
+            root.CFrame = oldCFrame
+            return
+        end
+        -- Forzar impacto directo dentro del hitbox del objetivo
+        root.CFrame = target.CFrame * CFrame.new(0, 0, 0)
+    end)
+end
+
+-- ==========================================
+-- [ SECCIÓN 9: CONSTRUCTOR DE COMPONENTES UI ]
+-- ==========================================
+local function spawnButton(parentUI, name, callback)
+    local btn = Instance.new("TextButton", parentUI)
+    btn.Size = UIConfig.BtnSize
+    btn.BackgroundColor3 = Color3.fromRGB(40, 50, 80)
+    btn.Text = name
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.TextScaled = true
+    btn.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local function spawnSlider(name, min, max, start, callback)
+    local container = Instance.new("Frame", scroll)
+    container.Size = UIConfig.SliderContSize
+    container.BackgroundTransparency = 1
+
+    local label = Instance.new("TextLabel", container)
+    label.Size = UDim2.fromScale(1, 0.45)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.new(1,1,1)
+    label.TextScaled = true
+    label.Font = Enum.Font.Gotham
+    label.Text = name .. ": " .. start
+
+    local track = Instance.new("Frame", container)
+    track.Size = UIConfig.SliderTrackSize
+    track.Position = UDim2.fromScale(0, 0.55)
+    track.BackgroundColor3 = Color3.fromRGB(40,40,60)
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
+
+    local fill = Instance.new("Frame", track)
+    fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
+    fill.Size = UDim2.fromScale((start - min)/(max - min), 1)
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+
+    local dragging = false
+    local function processInput(inputObj)
+        local rawX = (inputObj.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+        local clampedX = math.clamp(rawX, 0, 1)
+        fill.Size = UDim2.fromScale(clampedX, 1)
+        local finalVal = math.floor(min + (max - min) * clampedX)
+        label.Text = name .. ": " .. finalVal
+        callback(finalVal)
+    end
+
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+            dragging = true 
+            processInput(i)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            processInput(i)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+            dragging = false 
+        end
+    end)
+end
+
+-- ==========================================
+-- [ SECCIÓN 10: RENDERIZADO SECUENCIAL ]
+-- ==========================================
+task.spawn(function()
+    task.wait(0.1)
+    
+    spawnSlider("SPEED", 16, 400, 16, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
+    spawnSlider("JUMP", 50, 500, 50, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
+    spawnSlider("FLY", 30, 800, 65, function(v) flySpeed = v end)
+    spawnSlider("RADIUS", 5, 1000, 50, function(v) ringRadius = v end)
+    
+    spawnButton(scroll, "HEADLESS", function()
+        headlessActive = not headlessActive
+        local h = player.Character and player.Character:FindFirstChild("Head")
+        if h then h.Transparency = headlessActive and 1 or 0 end
+    end)
+    
+    spawnButton(scroll, "FLY", toggleFly)
+    spawnButton(scroll, "ESP", toggleESP)
+    spawnButton(scroll, "TORNADO", toggleTornado)
+    
+    spawnButton(scroll, "FLING", function()
+        tkPanelActive = not tkPanelActive
+        tkPanel.Visible = tkPanelActive
+        crosshair.Visible = tkPanelActive
+        if not tkPanelActive then stopTK() end
+    end)
+    
+    spawnButton(scroll, "MM2", function()
+        loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
+    end)
+    
+    -- Botones del panel TK
+    local btnG = spawnButton(tkPanel, "AGARRAR", grabTK)
+    btnG.BackgroundColor3 = Color3.fromRGB(60,60,60)
+    
+    local btnS = spawnButton(tkPanel, "SOLTAR", stopTK)
+    btnS.BackgroundColor3 = Color3.fromRGB(40,40,70)
+    
+    local btnF = spawnButton(tkPanel, "🔥 FLING! 🔥", shootFling)
+    btnF.BackgroundColor3 = Color3.fromRGB(180,40,40)
+    btnF.TextColor3 = Color3.new(0,0,0)
+end)
+
+-- ==========================================
+-- [ SECCIÓN 11: ACTIVADORES DEL USUARIO ]
+-- ==========================================
+if isMobile then
+    local mControls = Instance.new("ScreenGui", targetParent)
+    mControls.Name = "MOBILE_CONTROLS"
+    local btn = Instance.new("TextButton", mControls)
+    btn.Size = UDim2.fromOffset(50, 50)
+    btn.Position = UDim2.new(0, 15, 0.5, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+    btn.Text = "🐙"
+    btn.TextScaled = true
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    makeDraggable(btn) -- El botón del pulpo también es arrastrable
+    btn.MouseButton1Click:Connect(handleMenuToggle)
+else
+    UIS.InputBegan:Connect(function(i, g) 
+        if not g and i.KeyCode == Enum.KeyCode.H then handleMenuToggle() end 
+    end)
+    
+    -- Controles de Fling para Ratón (Click Izquierdo/Derecho)
+    UIS.InputBegan:Connect(function(i, g)
+        if not tkPanelActive then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            if grabbedTarget then stopTK() else grabTK() end
+        elseif i.UserInputType == Enum.UserInputType.MouseButton2 then
+            shootFling()
+        end
+    end)
+end
+
+-- ==========================================
+-- [ SECCIÓN 12: INICIALIZACIÓN FINAL ]
+-- ==========================================
+player.CharacterAdded:Connect(function()
+    task.wait(1)
+    if flyActive then
+        flyActive = false
+        toggleFly()
+    end
+end)
+
+runIntro(function()
+    handleMenuToggle()
+end)
+
+print("🐙 PULPO_NOT_FOUND V9.0 | SISTEMA DRAGGABLE Y FLING FIX LOADED")
