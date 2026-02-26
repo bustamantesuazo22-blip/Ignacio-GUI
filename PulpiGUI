@@ -1,3 +1,21 @@
+--[[
+    ====================================================================================================
+                                      🐙 PULPI GUI V9.5 THE GOD SCRIPT 🐙
+                                       DESARROLLADOR: PulpoNot_Found
+    ====================================================================================================
+    [NOVEDADES V9.5 - MULTI-LANGUAGE EDITION]
+    - SISTEMA DE IDIOMAS: Soporte total para Español (ES) e Inglés (EN).
+    - GUARDADO AUTOMÁTICO: Utiliza writefile/readfile para recordar tu idioma (solo pregunta 1 vez).
+    - TRADUCCIÓN GLOBAL: Intro, Género, Sliders, Botones y Notificaciones traducidos dinámicamente.
+    - REFACTORIZACIÓN MODULAR: El script ahora se construye de forma asíncrona tras la selección.
+    
+    [FUNCIONES MANTENIDAS (100% ESTABLES)]
+    - Fly Móvil IY Style (Vector Dot Product).
+    - Interfaz iOS 26 (CanvasGroup PC / Frame Automático Móvil).
+    - Telequinesis Fling FE con filtro de Raycast (Anti-bugs).
+    - Intro API (Género y AvatarBust de PulpoNot_Found).
+    ====================================================================================================
+]]
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -14,8 +32,6 @@ local cam = Workspace.CurrentCamera
 -- Variables físicas y de estado
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 local menuOpen = false
-
--- Estados de módulos
 local flyActive = false
 local flySpeed = 65
 local ringActive = false
@@ -27,41 +43,76 @@ local headlessActive = false
 local connections = {fly = nil, ring = nil, esp = nil, tk = nil}
 
 -- ==========================================
--- [ SECCIÓN 1: SISTEMA UNIVERSAL DE ARRASTRE (DRAGGABLE) ]
+-- [ SECCIÓN 1: DICCIONARIO DE IDIOMAS Y ARCHIVOS ]
 -- ==========================================
-local function makeDraggable(guiObject)
-    local dragging = false
-    local dragInput, dragStart, startPos
+local LangData = {
+    es = {
+        LangTitle = "Selecciona tu Idioma",
+        MadeBy = "Hecho por PulpoNot_Found",
+        WelcomeM = "Bienvenido, ",
+        WelcomeF = "Bienvenida, ",
+        Hello = "Hola, ",
+        MenuTitle = "PULPI V9.5",
+        TkTitle = "🔮 PANEL FLING",
+        Speed = "VELOCIDAD",
+        Jump = "SALTO",
+        FlySpeed = "VUELO",
+        Radius = "RADIO",
+        Headless = "SIN CABEZA",
+        FlyBtn = "VOLAR",
+        EspBtn = "ESP (BLANCO)",
+        TornadoBtn = "TORNADO",
+        FlingMenuBtn = "PANEL FLING",
+        GrabBtn = "AGARRAR (MIRA)",
+        DropBtn = "SOLTAR",
+        FlingShoot = "🔥 ¡FLING! 🔥"
+    },
+    en = {
+        LangTitle = "Select your Language",
+        MadeBy = "Made by PulpoNot_Found",
+        WelcomeM = "Welcome, ",
+        WelcomeF = "Welcome, ",
+        Hello = "Hello, ",
+        MenuTitle = "PULPI V9.5",
+        TkTitle = "🔮 FLING PANEL",
+        Speed = "SPEED",
+        Jump = "JUMP",
+        FlySpeed = "FLY SPD",
+        Radius = "RADIUS",
+        Headless = "HEADLESS",
+        FlyBtn = "FLY",
+        EspBtn = "ESP (WHITE)",
+        TornadoBtn = "TORNADO",
+        FlingMenuBtn = "FLING PANEL",
+        GrabBtn = "GRAB (AIM)",
+        DropBtn = "DROP",
+        FlingShoot = "🔥 FLING! 🔥"
+    }
+}
 
-    guiObject.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = guiObject.Position
-            
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
+local currentLang = "es" -- Español por defecto
+
+local function T(key)
+    return LangData[currentLang][key] or key
+end
+
+local function saveLanguage(langCode)
+    pcall(function()
+        if not isfolder("PULPI_GUI") then
+            makefolder("PULPI_GUI")
+        end
+        writefile("PULPI_GUI/Language.txt", langCode)
+    end)
+end
+
+local function loadLanguage()
+    local saved = nil
+    pcall(function()
+        if isfile("PULPI_GUI/Language.txt") then
+            saved = readfile("PULPI_GUI/Language.txt")
         end
     end)
-
-    guiObject.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            local delta = input.Position - dragStart
-            guiObject.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
+    return saved
 end
 
 -- ==========================================
@@ -87,23 +138,115 @@ else
 end
 
 -- ==========================================
--- [ SECCIÓN 3: LIMPIEZA DE MEMORIA ]
+-- [ SECCIÓN 3: LIMPIEZA DE MEMORIA Y SEGURIDAD ]
 -- ==========================================
 pcall(function()
-    local oldGUIs = {"IGNACIO_GUI_V13", "IGNACIO_GUI_V9", "TK_GUI_V9", "MOBILE_CONTROLS", "PULPO_INTRO"}
+    local oldGUIs = {"PULPI_GUI_V9_5", "PULPI_GUI_V13", "TK_GUI_V9", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR"}
     for _, name in pairs(oldGUIs) do
         local obj = CoreGui:FindFirstChild(name) or player.PlayerGui:FindFirstChild(name)
         if obj then obj:Destroy() end
     end
     for _, obj in pairs(Lighting:GetChildren()) do
-        if obj.Name == "IGNACIO_BLUR" then obj:Destroy() end
+        if obj.Name == "PULPI_BLUR" then obj:Destroy() end
     end
 end)
 
 local targetParent = (pcall(function() return CoreGui.Name end)) and CoreGui or player.PlayerGui
 
+local function makeDraggable(guiObject)
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    guiObject.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = guiObject.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    guiObject.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            guiObject.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
 -- ==========================================
--- [ SECCIÓN 4: INTRODUCCIÓN CINEMATOGRÁFICA ]
+-- [ SECCIÓN 4: PANTALLA DE SELECCIÓN DE IDIOMA ]
+-- ==========================================
+local function showLangSelector(callback)
+    local langGui = Instance.new("ScreenGui", targetParent)
+    langGui.Name = "LANG_SELECTOR"
+    langGui.IgnoreGuiInset = true
+    langGui.DisplayOrder = 10000
+    
+    local blur = Instance.new("BlurEffect", Lighting)
+    blur.Size = 20
+    
+    local bg = Instance.new("Frame", langGui)
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+    bg.BackgroundTransparency = 0.3
+    
+    local panel = Instance.new("Frame", bg)
+    panel.Size = isMobile and UDim2.fromScale(0.6, 0.4) or UDim2.fromScale(0.3, 0.35)
+    panel.Position = UDim2.fromScale(0.5, 0.5)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
+    Instance.new("UIStroke", panel).Color = Color3.fromRGB(150, 180, 255)
+    
+    local title = Instance.new("TextLabel", panel)
+    title.Size = UDim2.fromScale(1, 0.3)
+    title.BackgroundTransparency = 1
+    title.Text = "Language / Idioma"
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.GothamBlack
+    title.TextScaled = true
+    
+    local btnEs = Instance.new("TextButton", panel)
+    btnEs.Size = UDim2.fromScale(0.8, 0.25)
+    btnEs.Position = UDim2.fromScale(0.1, 0.35)
+    btnEs.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
+    btnEs.Text = "🇪🇸 Español"
+    btnEs.TextColor3 = Color3.new(1,1,1)
+    btnEs.Font = Enum.Font.GothamBold
+    btnEs.TextScaled = true
+    Instance.new("UICorner", btnEs)
+    
+    local btnEn = Instance.new("TextButton", panel)
+    btnEn.Size = UDim2.fromScale(0.8, 0.25)
+    btnEn.Position = UDim2.fromScale(0.1, 0.65)
+    btnEn.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
+    btnEn.Text = "🇺🇸 English"
+    btnEn.TextColor3 = Color3.new(1,1,1)
+    btnEn.Font = Enum.Font.GothamBold
+    btnEn.TextScaled = true
+    Instance.new("UICorner", btnEn)
+
+    local function finalizeSelection(lang)
+        currentLang = lang
+        saveLanguage(lang)
+        blur:Destroy()
+        langGui:Destroy()
+        callback()
+    end
+
+    btnEs.MouseButton1Click:Connect(function() finalizeSelection("es") end)
+    btnEn.MouseButton1Click:Connect(function() finalizeSelection("en") end)
+end
+
+-- ==========================================
+-- [ SECCIÓN 5: INTRODUCCIÓN CINEMATOGRÁFICA ]
 -- ==========================================
 local function runIntro(onComplete)
     local introLayer = Instance.new("ScreenGui", targetParent)
@@ -131,10 +274,13 @@ local function runIntro(onComplete)
     pfp.Image = "rbxassetid://0"
     
     task.spawn(function()
-        local success, thumb = pcall(function()
-            return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.AvatarBust, Enum.ThumbnailSize.Size420x420)
-        end)
-        if success and thumb then pfp.Image = thumb end
+        local successId, devId = pcall(function() return Players:GetUserIdFromNameAsync("PulpoNot_Found") end)
+        if successId and devId then
+            local successThumb, thumb = pcall(function()
+                return Players:GetUserThumbnailAsync(devId, Enum.ThumbnailType.AvatarBust, Enum.ThumbnailSize.Size420x420)
+            end)
+            if successThumb and thumb then pfp.Image = thumb end
+        end
     end)
     
     Instance.new("UICorner", pfp).CornerRadius = UDim.new(1, 0)
@@ -148,17 +294,17 @@ local function runIntro(onComplete)
     authorTxt.Position = UDim2.fromScale(0.5, 0.7)
     authorTxt.AnchorPoint = Vector2.new(0.5, 0.5)
     authorTxt.BackgroundTransparency = 1
-    authorTxt.Text = "Made by PulpoNot_Found"
+    authorTxt.Text = T("MadeBy")
     authorTxt.TextColor3 = Color3.new(1, 1, 1)
     authorTxt.Font = Enum.Font.GothamBlack
     authorTxt.TextScaled = true
     authorTxt.TextTransparency = 1
 
-    local greeting = "Hola, "
+    local greeting = T("Hello")
     pcall(function()
         local data = HttpService:JSONDecode(game:HttpGet("https://users.roblox.com/v1/users/" .. player.UserId))
-        if data.gender == 2 then greeting = "Bienvenido, "
-        elseif data.gender == 3 then greeting = "Bienvenida, " end
+        if data.gender == 2 then greeting = T("WelcomeM")
+        elseif data.gender == 3 then greeting = T("WelcomeF") end
     end)
 
     local userTxt = Instance.new("TextLabel", centerContainer)
@@ -193,94 +339,10 @@ local function runIntro(onComplete)
     if onComplete then onComplete() end
 end
 
--- ==========================================
--- [ SECCIÓN 5: GUI PRINCIPAL Y BLUR ]
--- ==========================================
-local mainLayer = Instance.new("ScreenGui", targetParent)
-mainLayer.Name = "IGNACIO_GUI_V9"
-mainLayer.IgnoreGuiInset = true 
+-- ==============================================================================
+-- [ SECCIÓN 6: LÓGICAS FÍSICAS (FLY, TK, ESP, TORNADO) ]
+-- ==============================================================================
 
-local menuBase = Instance.new(UIConfig.Type, mainLayer)
-menuBase.Size = UIConfig.MainSize
-menuBase.Position = UDim2.fromScale(0.5, 0.5)
-menuBase.AnchorPoint = Vector2.new(0.5, 0.5) 
-menuBase.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-menuBase.Visible = false 
-menuBase.Active = true
-
-if isMobile then
-    menuBase.BackgroundTransparency = 0.15
-else
-    menuBase.BackgroundTransparency = 0.25
-    menuBase.GroupTransparency = 1
-end
-
--- HACER EL MENÚ PRINCIPAL ARRASTRABLE
-makeDraggable(menuBase)
-
-Instance.new("UICorner", menuBase).CornerRadius = UDim.new(0, 20)
-local menuStroke = Instance.new("UIStroke", menuBase)
-menuStroke.Thickness = 2
-menuStroke.Color = Color3.fromRGB(150, 180, 255)
-menuStroke.Transparency = 0
-
-local zoomScale = Instance.new("UIScale", menuBase)
-zoomScale.Scale = isMobile and 1 or 0.85
-
-local scroll = Instance.new("ScrollingFrame", menuBase)
-scroll.Size = UDim2.fromScale(1, 0.9)
-scroll.Position = UDim2.fromScale(0, 0.1)
-scroll.BackgroundTransparency = 1 
-scroll.BorderSizePixel = 0
-scroll.ScrollBarThickness = UIConfig.ScrollThick
-scroll.ScrollingDirection = Enum.ScrollingDirection.Y
-scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y 
-
-local scrollLayout = Instance.new("UIListLayout", scroll)
-scrollLayout.Padding = UDim.new(0, 12)
-scrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
-scrollLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-
-local titleHeader = Instance.new("TextLabel", menuBase)
-titleHeader.Size = UDim2.fromScale(1, 0.1)
-titleHeader.BackgroundTransparency = 1
-titleHeader.Text = "IGNACIO V9"
-titleHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
-titleHeader.TextScaled = true
-titleHeader.Font = Enum.Font.GothamBlack
-
-local bgBlur = Instance.new("BlurEffect", Lighting)
-bgBlur.Name = "IGNACIO_BLUR"
-bgBlur.Size = 0 
-
-local function handleMenuToggle()
-    menuOpen = not menuOpen
-    if isMobile then
-        menuBase.Visible = menuOpen
-        bgBlur.Size = menuOpen and 15 or 0
-    else
-        local tInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-        if menuOpen then
-            menuBase.Visible = true
-            TweenService:Create(menuBase, tInfo, {GroupTransparency = 0}):Play()
-            TweenService:Create(zoomScale, tInfo, {Scale = 1}):Play()
-            TweenService:Create(bgBlur, tInfo, {Size = 18}):Play()
-        else
-            local hide = TweenService:Create(menuBase, tInfo, {GroupTransparency = 1})
-            TweenService:Create(zoomScale, tInfo, {Scale = 0.85}):Play()
-            TweenService:Create(bgBlur, tInfo, {Size = 0}):Play()
-            hide:Play()
-            task.spawn(function()
-                hide.Completed:Wait()
-                if not menuOpen then menuBase.Visible = false end
-            end)
-        end
-    end
-end
-
--- ==========================================
--- [ SECCIÓN 6: LÓGICA DE VUELO (IY MOBILE) ]
--- ==========================================
 local bvFly, bgFly
 local function startFlight()
     local char = player.Character
@@ -343,9 +405,6 @@ local function toggleFly()
     if flyActive then startFlight() else stopFlight() end
 end
 
--- ==========================================
--- [ SECCIÓN 7: TORNADO & ESP ]
--- ==========================================
 local function toggleTornado()
     ringActive = not ringActive
     if ringActive then
@@ -373,9 +432,9 @@ local function toggleESP()
         connections.esp = RunService.RenderStepped:Connect(function()
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= player and p.Character then
-                    if not p.Character:FindFirstChild("IGN_ESP_V9") then
+                    if not p.Character:FindFirstChild("PULPI_ESP_V9") then
                         local hl = Instance.new("Highlight", p.Character)
-                        hl.Name = "IGN_ESP_V9"
+                        hl.Name = "PULPI_ESP_V9"
                         hl.FillTransparency = 1 
                         hl.OutlineColor = Color3.new(1, 1, 1)
                         hl.OutlineTransparency = 0
@@ -386,244 +445,290 @@ local function toggleESP()
     else
         if connections.esp then connections.esp:Disconnect() connections.esp = nil end
         for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("IGN_ESP_V9") then p.Character.IGN_ESP_V9:Destroy() end
+            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V9") then p.Character.PULPI_ESP_V9:Destroy() end
         end
     end
 end
 
 -- ==========================================
--- [ SECCIÓN 8: GUI DE TELEQUINESIS Y FLING CORREGIDO ]
+-- [ SECCIÓN 7: CONSTRUCCIÓN COMPLETA DE GUI Y ORQUESTACIÓN ]
 -- ==========================================
-local tkGui = Instance.new("ScreenGui", targetParent)
-tkGui.Name = "TK_GUI_V9"
-tkGui.IgnoreGuiInset = true 
-tkGui.Enabled = true
+local function buildAndOrchestrate()
+    -- MAIN GUI
+    local mainLayer = Instance.new("ScreenGui", targetParent)
+    mainLayer.Name = "PULPI_GUI_V9_5"
+    mainLayer.IgnoreGuiInset = true 
 
-local tkPanel = Instance.new("Frame", tkGui)
-tkPanel.Size = UIConfig.TkSize
-tkPanel.Position = isMobile and UDim2.fromScale(0.5, 0.85) or UDim2.fromScale(0.5, 0.85)
-tkPanel.AnchorPoint = Vector2.new(0.5, 1)
-tkPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-tkPanel.BackgroundTransparency = 0.15
-tkPanel.Visible = false 
-tkPanel.Active = true
+    local menuBase = Instance.new(UIConfig.Type, mainLayer)
+    menuBase.Size = UIConfig.MainSize
+    menuBase.Position = UDim2.fromScale(0.5, 0.5)
+    menuBase.AnchorPoint = Vector2.new(0.5, 0.5) 
+    menuBase.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    menuBase.Visible = false 
+    menuBase.Active = true
 
--- HACER EL PANEL TK ARRASTRABLE
-makeDraggable(tkPanel)
+    if isMobile then
+        menuBase.BackgroundTransparency = 0.15
+    else
+        menuBase.BackgroundTransparency = 0.25
+        menuBase.GroupTransparency = 1
+    end
 
-Instance.new("UICorner", tkPanel).CornerRadius = UDim.new(0,16)
-Instance.new("UIStroke", tkPanel).Color = Color3.new(1, 1, 1)
+    makeDraggable(menuBase)
+    Instance.new("UICorner", menuBase).CornerRadius = UDim.new(0, 20)
+    local menuStroke = Instance.new("UIStroke", menuBase)
+    menuStroke.Thickness = 2
+    menuStroke.Color = Color3.fromRGB(150, 180, 255)
+    menuStroke.Transparency = 0
 
-local tkLayout = Instance.new("UIListLayout", tkPanel)
-tkLayout.Padding = UDim.new(0, 10)
-tkLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-tkLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    local zoomScale = Instance.new("UIScale", menuBase)
+    zoomScale.Scale = isMobile and 1 or 0.85
 
-local tkLabel = Instance.new("TextLabel", tkPanel)
-tkLabel.Size = UDim2.fromScale(1, 0.2)
-tkLabel.BackgroundTransparency = 1
-tkLabel.Text = "🔮 FLING PANEL"
-tkLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-tkLabel.TextScaled = true
-tkLabel.Font = Enum.Font.GothamBold
+    local scroll = Instance.new("ScrollingFrame", menuBase)
+    scroll.Size = UDim2.fromScale(1, 0.9)
+    scroll.Position = UDim2.fromScale(0, 0.1)
+    scroll.BackgroundTransparency = 1 
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = UIConfig.ScrollThick
+    scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y 
 
-local crosshair = Instance.new("Frame", tkGui)
-crosshair.Size = UDim2.fromOffset(8, 8)
-crosshair.Position = UDim2.fromScale(0.5, 0.5)
-crosshair.AnchorPoint = Vector2.new(0.5, 0.5)
-crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
-crosshair.Visible = false
-Instance.new("UICorner", crosshair).CornerRadius = UDim.new(1, 0)
+    local scrollLayout = Instance.new("UIListLayout", scroll)
+    scrollLayout.Padding = UDim.new(0, 12)
+    scrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    scrollLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
--- Contenedor para filtrar partes que crea el script (Ignorarlas en el Raycast)
-local ignoreFolder = Instance.new("Folder", Workspace)
-ignoreFolder.Name = "IGNACIO_IGNORE_FOLDER"
+    local titleHeader = Instance.new("TextLabel", menuBase)
+    titleHeader.Size = UDim2.fromScale(1, 0.1)
+    titleHeader.BackgroundTransparency = 1
+    titleHeader.Text = T("MenuTitle")
+    titleHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleHeader.TextScaled = true
+    titleHeader.Font = Enum.Font.GothamBlack
 
-local tkGhost, grabbedTarget
+    local bgBlur = Instance.new("BlurEffect", Lighting)
+    bgBlur.Name = "PULPI_BLUR"
+    bgBlur.Size = 0 
 
-local function getAimPart()
-    local cx = crosshair.AbsolutePosition.X + (crosshair.AbsoluteSize.X / 2)
-    local cy = crosshair.AbsolutePosition.Y + (crosshair.AbsoluteSize.Y / 2)
-    local ray = cam:ViewportPointToRay(cx, cy)
-    
-    -- CONFIGURACIÓN DE FILTRO AVANZADO: Ignora tu personaje y las piezas fantasma
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {player.Character, cam, ignoreFolder}
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    
-    local hit = Workspace:Raycast(ray.Origin, ray.Direction * 800, params)
-    return hit and hit.Instance
-end
+    local function handleMenuToggle()
+        menuOpen = not menuOpen
+        if isMobile then
+            menuBase.Visible = menuOpen
+            bgBlur.Size = menuOpen and 15 or 0
+        else
+            local tInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+            if menuOpen then
+                menuBase.Visible = true
+                TweenService:Create(menuBase, tInfo, {GroupTransparency = 0}):Play()
+                TweenService:Create(zoomScale, tInfo, {Scale = 1}):Play()
+                TweenService:Create(bgBlur, tInfo, {Size = 18}):Play()
+            else
+                local hide = TweenService:Create(menuBase, tInfo, {GroupTransparency = 1})
+                TweenService:Create(zoomScale, tInfo, {Scale = 0.85}):Play()
+                TweenService:Create(bgBlur, tInfo, {Size = 0}):Play()
+                hide:Play()
+                task.spawn(function()
+                    hide.Completed:Wait()
+                    if not menuOpen then menuBase.Visible = false end
+                end)
+            end
+        end
+    end
 
-local function stopTK()
-    if connections.tk then connections.tk:Disconnect() connections.tk = nil end
-    if tkGhost then tkGhost:Destroy() tkGhost = nil end
-    grabbedTarget = nil
+    -- TK GUI
+    local tkGui = Instance.new("ScreenGui", targetParent)
+    tkGui.Name = "TK_GUI_V9"
+    tkGui.IgnoreGuiInset = true 
+    tkGui.Enabled = true
+
+    local tkPanel = Instance.new("Frame", tkGui)
+    tkPanel.Size = UIConfig.TkSize
+    tkPanel.Position = isMobile and UDim2.fromScale(0.5, 0.85) or UDim2.fromScale(0.5, 0.85)
+    tkPanel.AnchorPoint = Vector2.new(0.5, 1)
+    tkPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    tkPanel.BackgroundTransparency = 0.15
+    tkPanel.Visible = false 
+    tkPanel.Active = true
+
+    makeDraggable(tkPanel)
+    Instance.new("UICorner", tkPanel).CornerRadius = UDim.new(0,16)
+    Instance.new("UIStroke", tkPanel).Color = Color3.new(1, 1, 1)
+
+    local tkLayoutUI = Instance.new("UIListLayout", tkPanel)
+    tkLayoutUI.Padding = UDim.new(0, 10)
+    tkLayoutUI.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    tkLayoutUI.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local tkTitle = Instance.new("TextLabel", tkPanel)
+    tkTitle.Size = UDim2.fromScale(1, 0.2)
+    tkTitle.BackgroundTransparency = 1
+    tkTitle.Text = T("TkTitle")
+    tkTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tkTitle.TextScaled = true
+    tkTitle.Font = Enum.Font.GothamBold
+
+    local crosshair = Instance.new("Frame", tkGui)
+    crosshair.Size = UDim2.fromOffset(8, 8)
+    crosshair.Position = UDim2.fromScale(0.5, 0.5)
+    crosshair.AnchorPoint = Vector2.new(0.5, 0.5)
     crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
-end
+    crosshair.Visible = false
+    Instance.new("UICorner", crosshair).CornerRadius = UDim.new(1, 0)
 
-local function grabTK()
-    local part = getAimPart()
-    if not part or not part:IsA("BasePart") then return end
-    stopTK()
-    
-    grabbedTarget = part
-    tkGhost = part:Clone()
-    tkGhost:ClearAllChildren()
-    tkGhost.Anchored = true
-    tkGhost.CanCollide = false
-    tkGhost.Transparency = 0.5
-    tkGhost.Material = Enum.Material.ForceField
-    tkGhost.Color = Color3.fromRGB(255, 255, 255)
-    tkGhost.Parent = ignoreFolder -- Lo metemos aquí para que el Raycast lo ignore
-    
-    crosshair.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    local ignoreFolder = Instance.new("Folder", Workspace)
+    ignoreFolder.Name = "PULPI_IGNORE_FOLDER"
 
-    connections.tk = RunService.RenderStepped:Connect(function()
-        if tkGhost then
-            tkGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * 15)
-        end
-    end)
-end
-
--- LÓGICA DE FLING MEJORADA PARA MAXIMA POTENCIA (PC Y MÓVIL)
-local function shootFling()
-    if not grabbedTarget then return end
-    local target = grabbedTarget
-    stopTK()
-    if target.Anchored then return end
-
-    local char = player.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local oldCFrame = root.CFrame
-    
-    local forceV = Instance.new("BodyVelocity", root)
-    forceV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    forceV.Velocity = Vector3.zero
-
-    -- Usamos valores EXTREMOS de rotación para asegurar el Fling en cualquier servidor
-    local forceA = Instance.new("BodyAngularVelocity", root)
-    forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    forceA.AngularVelocity = Vector3.new(0, 999999999, 0)
-
-    local noclipping = RunService.Stepped:Connect(function()
-        for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = false end
-        end
-    end)
-
-    local tStart = tick()
-    local loopFling
-    loopFling = RunService.Heartbeat:Connect(function()
-        if tick() - tStart > 1 or not target.Parent then
-            loopFling:Disconnect()
-            noclipping:Disconnect()
-            forceV:Destroy()
-            forceA:Destroy()
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            root.RotVelocity = Vector3.zero
-            root.Velocity = Vector3.zero
-            root.CFrame = oldCFrame
-            return
-        end
-        -- Forzar impacto directo dentro del hitbox del objetivo
-        root.CFrame = target.CFrame * CFrame.new(0, 0, 0)
-    end)
-end
-
--- ==========================================
--- [ SECCIÓN 9: CONSTRUCTOR DE COMPONENTES UI ]
--- ==========================================
-local function spawnButton(parentUI, name, callback)
-    local btn = Instance.new("TextButton", parentUI)
-    btn.Size = UIConfig.BtnSize
-    btn.BackgroundColor3 = Color3.fromRGB(40, 50, 80)
-    btn.Text = name
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.TextScaled = true
-    btn.Font = Enum.Font.GothamBold
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
-    btn.MouseButton1Click:Connect(callback)
-    return btn
-end
-
-local function spawnSlider(name, min, max, start, callback)
-    local container = Instance.new("Frame", scroll)
-    container.Size = UIConfig.SliderContSize
-    container.BackgroundTransparency = 1
-
-    local label = Instance.new("TextLabel", container)
-    label.Size = UDim2.fromScale(1, 0.45)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.new(1,1,1)
-    label.TextScaled = true
-    label.Font = Enum.Font.Gotham
-    label.Text = name .. ": " .. start
-
-    local track = Instance.new("Frame", container)
-    track.Size = UIConfig.SliderTrackSize
-    track.Position = UDim2.fromScale(0, 0.55)
-    track.BackgroundColor3 = Color3.fromRGB(40,40,60)
-    Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
-
-    local fill = Instance.new("Frame", track)
-    fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
-    fill.Size = UDim2.fromScale((start - min)/(max - min), 1)
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
-
-    local dragging = false
-    local function processInput(inputObj)
-        local rawX = (inputObj.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
-        local clampedX = math.clamp(rawX, 0, 1)
-        fill.Size = UDim2.fromScale(clampedX, 1)
-        local finalVal = math.floor(min + (max - min) * clampedX)
-        label.Text = name .. ": " .. finalVal
-        callback(finalVal)
+    local tkGhost, grabbedTarget
+    local function getAimPart()
+        local cx = crosshair.AbsolutePosition.X + (crosshair.AbsoluteSize.X / 2)
+        local cy = crosshair.AbsolutePosition.Y + (crosshair.AbsoluteSize.Y / 2)
+        local ray = cam:ViewportPointToRay(cx, cy)
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {player.Character, cam, ignoreFolder}
+        params.FilterType = Enum.RaycastFilterType.Blacklist
+        local hit = Workspace:Raycast(ray.Origin, ray.Direction * 800, params)
+        return hit and hit.Instance
     end
 
-    track.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
-            dragging = true 
-            processInput(i)
-        end
-    end)
-    UIS.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            processInput(i)
-        end
-    end)
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
-            dragging = false 
-        end
-    end)
-end
+    local function stopTK()
+        if connections.tk then connections.tk:Disconnect() connections.tk = nil end
+        if tkGhost then tkGhost:Destroy() tkGhost = nil end
+        grabbedTarget = nil
+        crosshair.BackgroundColor3 = Color3.new(1, 1, 1)
+    end
 
--- ==========================================
--- [ SECCIÓN 10: RENDERIZADO SECUENCIAL ]
--- ==========================================
-task.spawn(function()
-    task.wait(0.1)
+    local function grabTK()
+        local part = getAimPart()
+        if not part or not part:IsA("BasePart") then return end
+        stopTK()
+        grabbedTarget = part
+        tkGhost = part:Clone()
+        tkGhost:ClearAllChildren()
+        tkGhost.Anchored = true
+        tkGhost.CanCollide = false
+        tkGhost.Transparency = 0.5
+        tkGhost.Material = Enum.Material.ForceField
+        tkGhost.Color = Color3.fromRGB(255, 255, 255)
+        tkGhost.Parent = ignoreFolder
+        crosshair.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+        connections.tk = RunService.RenderStepped:Connect(function()
+            if tkGhost then tkGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * 15) end
+        end)
+    end
+
+    local function shootFling()
+        if not grabbedTarget then return end
+        local target = grabbedTarget
+        stopTK()
+        if target.Anchored then return end
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local oldCFrame = root.CFrame
+        local forceV = Instance.new("BodyVelocity", root)
+        forceV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        forceV.Velocity = Vector3.zero
+        local forceA = Instance.new("BodyAngularVelocity", root)
+        forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        forceA.AngularVelocity = Vector3.new(0, 999999999, 0)
+        local noclipping = RunService.Stepped:Connect(function()
+            for _, v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end
+        end)
+        local tStart = tick()
+        local loopFling
+        loopFling = RunService.Heartbeat:Connect(function()
+            if tick() - tStart > 1 or not target.Parent then
+                loopFling:Disconnect() noclipping:Disconnect()
+                forceV:Destroy() forceA:Destroy()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.RotVelocity = Vector3.zero
+                root.Velocity = Vector3.zero
+                root.CFrame = oldCFrame
+                return
+            end
+            root.CFrame = target.CFrame * CFrame.new(0, 0, 0)
+        end)
+    end
+
+    -- Constructores
+    local function spawnButton(parentUI, name, callback)
+        local btn = Instance.new("TextButton", parentUI)
+        btn.Size = UIConfig.BtnSize
+        btn.BackgroundColor3 = Color3.fromRGB(40, 50, 80)
+        btn.Text = name
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.TextScaled = true
+        btn.Font = Enum.Font.GothamBold
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+        btn.MouseButton1Click:Connect(callback)
+        return btn
+    end
+
+    local function spawnSlider(name, min, max, start, callback)
+        local container = Instance.new("Frame", scroll)
+        container.Size = UIConfig.SliderContSize
+        container.BackgroundTransparency = 1
+        local label = Instance.new("TextLabel", container)
+        label.Size = UDim2.fromScale(1, 0.45)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.new(1,1,1)
+        label.TextScaled = true
+        label.Font = Enum.Font.Gotham
+        label.Text = name .. ": " .. start
+        local track = Instance.new("Frame", container)
+        track.Size = UIConfig.SliderTrackSize
+        track.Position = UDim2.fromScale(0, 0.55)
+        track.BackgroundColor3 = Color3.fromRGB(40,40,60)
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
+        local fill = Instance.new("Frame", track)
+        fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
+        fill.Size = UDim2.fromScale((start - min)/(max - min), 1)
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+
+        local dragging = false
+        local function processInput(inputObj)
+            local rawX = (inputObj.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+            local clampedX = math.clamp(rawX, 0, 1)
+            fill.Size = UDim2.fromScale(clampedX, 1)
+            local finalVal = math.floor(min + (max - min) * clampedX)
+            label.Text = name .. ": " .. finalVal
+            callback(finalVal)
+        end
+
+        track.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+                dragging = true processInput(i)
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+                processInput(i)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
+                dragging = false 
+            end
+        end)
+    end
+
+    -- Inserción con traducción T()
+    spawnSlider(T("Speed"), 16, 400, 16, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
+    spawnSlider(T("Jump"), 50, 500, 50, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
+    spawnSlider(T("FlySpeed"), 30, 800, 65, function(v) flySpeed = v end)
+    spawnSlider(T("Radius"), 5, 1000, 50, function(v) ringRadius = v end)
     
-    spawnSlider("SPEED", 16, 400, 16, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
-    spawnSlider("JUMP", 50, 500, 50, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
-    spawnSlider("FLY", 30, 800, 65, function(v) flySpeed = v end)
-    spawnSlider("RADIUS", 5, 1000, 50, function(v) ringRadius = v end)
-    
-    spawnButton(scroll, "HEADLESS", function()
+    spawnButton(scroll, T("Headless"), function()
         headlessActive = not headlessActive
         local h = player.Character and player.Character:FindFirstChild("Head")
         if h then h.Transparency = headlessActive and 1 or 0 end
     end)
+    spawnButton(scroll, T("FlyBtn"), toggleFly)
+    spawnButton(scroll, T("EspBtn"), toggleESP)
+    spawnButton(scroll, T("TornadoBtn"), toggleTornado)
     
-    spawnButton(scroll, "FLY", toggleFly)
-    spawnButton(scroll, "ESP", toggleESP)
-    spawnButton(scroll, "TORNADO", toggleTornado)
-    
-    spawnButton(scroll, "FLING", function()
+    spawnButton(scroll, T("FlingMenuBtn"), function()
         tkPanelActive = not tkPanelActive
         tkPanel.Visible = tkPanelActive
         crosshair.Visible = tkPanelActive
@@ -634,63 +739,71 @@ task.spawn(function()
         loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
     end)
     
-    -- Botones del panel TK
-    local btnG = spawnButton(tkPanel, "AGARRAR", grabTK)
+    local btnG = spawnButton(tkPanel, T("GrabBtn"), grabTK)
     btnG.BackgroundColor3 = Color3.fromRGB(60,60,60)
-    
-    local btnS = spawnButton(tkPanel, "SOLTAR", stopTK)
+    local btnS = spawnButton(tkPanel, T("DropBtn"), stopTK)
     btnS.BackgroundColor3 = Color3.fromRGB(40,40,70)
-    
-    local btnF = spawnButton(tkPanel, "🔥 FLING! 🔥", shootFling)
+    local btnF = spawnButton(tkPanel, T("FlingShoot"), shootFling)
     btnF.BackgroundColor3 = Color3.fromRGB(180,40,40)
     btnF.TextColor3 = Color3.new(0,0,0)
-end)
 
--- ==========================================
--- [ SECCIÓN 11: ACTIVADORES DEL USUARIO ]
--- ==========================================
-if isMobile then
-    local mControls = Instance.new("ScreenGui", targetParent)
-    mControls.Name = "MOBILE_CONTROLS"
-    local btn = Instance.new("TextButton", mControls)
-    btn.Size = UDim2.fromOffset(50, 50)
-    btn.Position = UDim2.new(0, 15, 0.5, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-    btn.Text = "🐙"
-    btn.TextScaled = true
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
-    makeDraggable(btn) -- El botón del pulpo también es arrastrable
-    btn.MouseButton1Click:Connect(handleMenuToggle)
-else
-    UIS.InputBegan:Connect(function(i, g) 
-        if not g and i.KeyCode == Enum.KeyCode.H then handleMenuToggle() end 
-    end)
-    
-    -- Controles de Fling para Ratón (Click Izquierdo/Derecho)
-    UIS.InputBegan:Connect(function(i, g)
-        if not tkPanelActive then return end
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then
-            if grabbedTarget then stopTK() else grabTK() end
-        elseif i.UserInputType == Enum.UserInputType.MouseButton2 then
-            shootFling()
+    -- Activadores y Eventos Finales
+    if isMobile then
+        local mControls = Instance.new("ScreenGui", targetParent)
+        mControls.Name = "MOBILE_CONTROLS"
+        local btn = Instance.new("TextButton", mControls)
+        btn.Size = UDim2.fromOffset(50, 50)
+        btn.Position = UDim2.new(0, 15, 0.5, 0)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+        btn.Text = "🐙"
+        btn.TextScaled = true
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+        makeDraggable(btn)
+        btn.MouseButton1Click:Connect(handleMenuToggle)
+    else
+        UIS.InputBegan:Connect(function(i, g) 
+            if not g and i.KeyCode == Enum.KeyCode.H then handleMenuToggle() end 
+        end)
+        UIS.InputBegan:Connect(function(i, g)
+            if not tkPanelActive then return end
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                if grabbedTarget then stopTK() else grabTK() end
+            elseif i.UserInputType == Enum.UserInputType.MouseButton2 then
+                shootFling()
+            end
+        end)
+    end
+
+    player.CharacterAdded:Connect(function()
+        task.wait(1)
+        if flyActive then
+            flyActive = false
+            toggleFly()
         end
     end)
+
+    handleMenuToggle()
 end
 
 -- ==========================================
--- [ SECCIÓN 12: INICIALIZACIÓN FINAL ]
+-- [ SECCIÓN 8: ORQUESTADOR PRINCIPAL DE CARGA ]
 -- ==========================================
-player.CharacterAdded:Connect(function()
-    task.wait(1)
-    if flyActive then
-        flyActive = false
-        toggleFly()
-    end
-end)
+local savedLanguage = loadLanguage()
 
-runIntro(function()
-    handleMenuToggle()
-end)
+if savedLanguage then
+    -- Ya eligió idioma antes, cargar directo
+    currentLang = savedLanguage
+    runIntro(function()
+        buildAndOrchestrate()
+    end)
+else
+    -- Primera vez: Mostrar Selector -> Guardar -> Intro -> GUI
+    showLangSelector(function()
+        runIntro(function()
+            buildAndOrchestrate()
+        end)
+    end)
+end
 
+print("🐙 PULPI V9.5 | MULTI-LANGUAGE SYSTEM LOADED")
 
-print("🐙 PULPO_NOT_FOUND V9.0 | SISTEMA DRAGGABLE Y FLING FIX LOADED")
