@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -9,6 +8,8 @@ local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
 local MarketplaceService = game:GetService("MarketplaceService")
 local StarterGui = game:GetService("StarterGui")
+local SoundService = game:GetService("SoundService")
+local TextChatService = game:GetService("TextChatService")
 
 local player = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
@@ -177,7 +178,7 @@ local LangData = {
         Headless = "FE HEADLESS",
         FlyBtn = "VOLAR",
         EspBtn = "ESP (BLANCO)",
-        TornadoBtn = "TORNADO",
+        TornadoBtn = "Ring🪐",
         FlingMenuBtn = "PANEL FLING",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
         AnnounceMenuBtn = "ANUNCIOS GLOBALES 📢",
@@ -204,7 +205,7 @@ local LangData = {
         Headless = "FE HEADLESS",
         FlyBtn = "FLY",
         EspBtn = "ESP (WHITE)",
-        TornadoBtn = "TORNADO",
+        TornadoBtn = "Ring 🪐",
         FlingMenuBtn = "FLING PANEL",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
         AnnounceMenuBtn = "GLOBAL ANNOUNCE 📢",
@@ -463,7 +464,137 @@ local function runIntro(onComplete)
 end
 
 -- ==========================================
--- [ SECCIÓN 5: LÓGICAS FÍSICAS (FLY, TK, ESP, TORNADO, HEADLESS) ]
+-- [ SECCIÓN 5: LÓGICAS FÍSICAS (FLY, TK, ESP, RING V4, HEADLESS) ]
+-- ==========================================
+
+-- ==========================================
+-- [ LÓGICA DE SUPER RING V4 (PLAGIADO E INTEGRADO) ]
+-- ==========================================
+if not getgenv().Network then
+    getgenv().Network = {
+        BaseParts = {},
+        Velocity = Vector3.new(14.46262424, 14.46262424, 14.46262424)
+    }
+
+    Network.RetainPart = function(Part)
+        if typeof(Part) == "Instance" and Part:IsA("BasePart") and Part:IsDescendantOf(Workspace) then
+            table.insert(Network.BaseParts, Part)
+            Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+            Part.CanCollide = false
+        end
+    end
+
+    local function EnablePartControl()
+        player.ReplicationFocus = Workspace
+        RunService.Heartbeat:Connect(function()
+            pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+            for _, Part in pairs(Network.BaseParts) do
+                if Part:IsDescendantOf(Workspace) then
+                    Part.Velocity = Network.Velocity
+                end
+            end
+        end)
+    end
+    EnablePartControl()
+end
+
+local folderRing = Instance.new("Folder", Workspace)
+local partRing = Instance.new("Part", folderRing)
+local Attachment1Ring = Instance.new("Attachment", partRing)
+partRing.Anchored = true
+partRing.CanCollide = false
+partRing.Transparency = 1
+
+local function ForcePartRing(v)
+    if v:IsA("Part") and not v.Anchored and not v.Parent:FindFirstChild("Humanoid") and not v.Parent:FindFirstChild("Head") and v.Name ~= "Handle" then
+        for _, x in next, v:GetChildren() do
+            if x:IsA("BodyAngularVelocity") or x:IsA("BodyForce") or x:IsA("BodyGyro") or x:IsA("BodyPosition") or x:IsA("BodyThrust") or x:IsA("BodyVelocity") or x:IsA("RocketPropulsion") then
+                x:Destroy()
+            end
+        end
+        if v:FindFirstChild("Attachment") then v:FindFirstChild("Attachment"):Destroy() end
+        if v:FindFirstChild("AlignPosition") then v:FindFirstChild("AlignPosition"):Destroy() end
+        if v:FindFirstChild("Torque") then v:FindFirstChild("Torque"):Destroy() end
+        v.CanCollide = false
+        local Torque = Instance.new("Torque", v)
+        Torque.Torque = Vector3.new(100000, 100000, 100000)
+        local AlignPosition = Instance.new("AlignPosition", v)
+        local Attachment2 = Instance.new("Attachment", v)
+        Torque.Attachment0 = Attachment2
+        AlignPosition.MaxForce = 9999999999999999
+        AlignPosition.MaxVelocity = math.huge
+        AlignPosition.Responsiveness = 200
+        AlignPosition.Attachment0 = Attachment2
+        AlignPosition.Attachment1 = Attachment1Ring
+    end
+end
+
+local function RetainPartRing(Part)
+    if Part:IsA("BasePart") and not Part.Anchored and Part:IsDescendantOf(Workspace) then
+        if Part.Parent == player.Character or Part:IsDescendantOf(player.Character) then return false end
+        Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+        Part.CanCollide = false
+        return true
+    end
+    return false
+end
+
+local activeRingParts = {}
+local function addRingPart(part)
+    if RetainPartRing(part) then
+        if not table.find(activeRingParts, part) then table.insert(activeRingParts, part) end
+    end
+end
+local function removeRingPart(part)
+    local idx = table.find(activeRingParts, part)
+    if idx then table.remove(activeRingParts, idx) end
+end
+
+for _, part in pairs(Workspace:GetDescendants()) do addRingPart(part) end
+Workspace.DescendantAdded:Connect(addRingPart)
+Workspace.DescendantRemoving:Connect(removeRingPart)
+
+local function toggleRing()
+    ringActive = not ringActive
+    if ringActive then
+        -- Play initial sound
+        local sound = Instance.new("Sound")
+        sound.SoundId = "rbxassetid://2865227271"
+        sound.Parent = SoundService
+        sound:Play()
+        sound.Ended:Connect(function() sound:Destroy() end)
+          
+
+        local height = 100
+        local rotationSpeed = 1
+        local attractionStrength = 1000
+
+        connections.ring = RunService.Heartbeat:Connect(function()
+            local humanoidRootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                local tornadoCenter = humanoidRootPart.Position
+                for _, part in pairs(activeRingParts) do
+                    if part.Parent and not part.Anchored then
+                        local pos = part.Position
+                        local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
+                        local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
+                        local newAngle = angle + math.rad(rotationSpeed)
+                        local targetPos = Vector3.new(
+                            tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance),
+                            tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
+                            tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
+                        )
+                        local directionToTarget = (targetPos - part.Position).unit
+                        part.Velocity = directionToTarget * attractionStrength
+                    end
+                end
+            end
+        end)
+    else
+        if connections.ring then connections.ring:Disconnect() connections.ring = nil end
+    end
+end
+
 -- ==========================================
 
 local function applySpeedAndJump()
@@ -571,27 +702,6 @@ local function manageFlight(state)
         hum.PlatformStand = false
         if bvFly then bvFly:Destroy() bvFly = nil end
         if bgFly then bgFly:Destroy() bgFly = nil end
-    end
-end
-
-local function toggleTornado()
-    ringActive = not ringActive
-    if ringActive then
-        connections.ring = RunService.Heartbeat:Connect(function()
-            pcall(function() sethiddenproperty(player, "SimulationRadius", 1e9) end)
-            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            if not root then return end
-            local cycle = tick() * 6
-            for _, p in pairs(Workspace:GetDescendants()) do
-                if p:IsA("BasePart") and not p.Anchored and not p:IsDescendantOf(player.Character) then
-                    local target = root.Position + Vector3.new(math.cos(cycle)*SavedConfig.RingRadius, 4, math.sin(cycle)*SavedConfig.RingRadius)
-                    p.Velocity = (target - p.Position).Unit * 150
-                    p.CanCollide = false
-                end
-            end
-        end)
-    else
-        if connections.ring then connections.ring:Disconnect() connections.ring = nil end
     end
 end
 
@@ -1235,12 +1345,12 @@ local function buildAndOrchestrate()
         spawnSlider("WalkSpeed", 16, 400, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
         spawnSlider("JumpPower", 50, 500, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
         spawnSlider("FlySpeed", 30, 800, function(v) flySpeed = v end)
-        spawnSlider("RingRadius", 5, 1000, function(v) ringRadius = v end)
+        spawnSlider("RingRadius", 5, 1000, function(v) SavedConfig.RingRadius = v end)
         
         spawnButton(scroll, T("Headless"), function() toggleHeadlessFE() end)
         spawnButton(scroll, T("FlyBtn"), function() manageFlight() end)
         spawnButton(scroll, T("EspBtn"), function() manageESP() end)
-        spawnButton(scroll, T("TornadoBtn"), toggleTornado)
+        spawnButton(scroll, T("TornadoBtn"), toggleRing) -- Reemplazado a Super Ring V4
         
         spawnButton(scroll, T("FlingMenuBtn"), function()
             tkPanelActive = not tkPanelActive
@@ -1325,4 +1435,4 @@ else
     runIntro(buildAndOrchestrate)
 end
 
-print("🐙 PULPI V13.")
+print("🐙 PULPI V13.5 | TITAN ANNOUNCER & SUPER RING V4 LOADED")
