@@ -1,18 +1,3 @@
---[[
-    ====================================================================================================
-                                      🐙 PULPI GUI V13.5 TITAN ANNOUNCER 🐙
-                                       DESARROLLADOR: PulpoNot_Found
-    ====================================================================================================
-    [NOVEDADES V13.5 - ANNOUNCER EDITION]
-    - SISTEMA DE ANUNCIOS VIP: Un panel exclusivo que SOLO aparece si tu usuario es "PulpoNot_Found".
-    - PROTECCIÓN POR PIN: El panel de anuncios requiere la contraseña (6789) para desbloquearse.
-    - SISTEMA LOGGER: Envía notificación push a Discord mediante Webhook al ejecutar.
-    - TOXIC HUNTER: Lista de jugadores interactiva. Haz clic en un nombre y el Fling en bucle 
-      comienza al instante.
-    - ANTI-KAMIKAZE FLING: El script suspende tu personaje en el aire si la víctima muere.
-    - SISTEMA DE IDIOMAS Y GUARDADO: Tu configuración se guarda automáticamente en JSON.
-    ====================================================================================================
-]]
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -112,28 +97,38 @@ local headlessCache = {}
 local connections = {fly = nil, ring = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
 
 -- ==========================================
--- [ SECCIÓN 0: AUTO-EXECUTE (NO FALL DAMAGE FE) ]
+-- [ SECCIÓN 0: AUTO-EXECUTE (NO FALL DAMAGE UNIVERSAL FE) ]
 -- ==========================================
 task.spawn(function()
-    if game.PlaceId == 189707 then
-        pcall(function() setclipboard("https://discord.gg/ypjMw5xmuj") end)
-        local z = Vector3.zero
-        local function preventFallDamage(c)
-            local r = c:WaitForChild("HumanoidRootPart")
-            if r then
-                local con
-                con = RunService.Heartbeat:Connect(function()
-                    if not r.Parent then con:Disconnect() return end
-                    local v = r.AssemblyLinearVelocity
-                    r.AssemblyLinearVelocity = z
-                    RunService.RenderStepped:Wait()
-                    r.AssemblyLinearVelocity = v
-                end)
-            end
+    -- No Fall Damage Universal (Velocity Reset FE) - Xeno 2026
+    pcall(function() setclipboard("https://discord.gg/ypjMw5xmuj") end) -- Opcional: copia discord
+    
+    local rs = game:GetService("RunService")
+    local hb = rs.Heartbeat
+    local rsd = rs.RenderStepped
+    local lp = game.Players.LocalPlayer
+    local z = Vector3.zero
+
+    local function f(c)
+        local r = c:WaitForChild("HumanoidRootPart")
+        if r then
+            local con
+            con = hb:Connect(function()
+                if not r.Parent then
+                    con:Disconnect()
+                end
+                local v = r.AssemblyLinearVelocity
+                r.AssemblyLinearVelocity = z
+                rsd:Wait()
+                r.AssemblyLinearVelocity = v
+            end)
         end
-        preventFallDamage(player.Character or player.CharacterAdded:Wait())
-        player.CharacterAdded:Connect(preventFallDamage)
     end
+
+    f(lp.Character or lp.CharacterAdded:Wait())
+    lp.CharacterAdded:Connect(f)
+
+    print("¡NO FALL DAMAGE UNIVERSAL ACTIVADO! Salta libre 🌪️💥")
 end)
 
 -- ==========================================
@@ -608,9 +603,9 @@ local function manageESP(state)
             connections.esp = RunService.RenderStepped:Connect(function()
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= player and p.Character then
-                        if not p.Character:FindFirstChild("PULPI_ESP_V13") then
+                        if not p.Character:FindFirstChild("PULPI_ESP_V12") then
                             local hl = Instance.new("Highlight", p.Character)
-                            hl.Name = "PULPI_ESP_V13"
+                            hl.Name = "PULPI_ESP_V12"
                             hl.FillTransparency = 1 
                             hl.OutlineColor = Color3.new(1, 1, 1)
                             hl.OutlineTransparency = 0
@@ -622,7 +617,7 @@ local function manageESP(state)
     else
         if connections.esp then connections.esp:Disconnect() connections.esp = nil end
         for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V13") then p.Character.PULPI_ESP_V13:Destroy() end
+            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then p.Character.PULPI_ESP_V12:Destroy() end
         end
     end
 end
@@ -744,7 +739,7 @@ end
 local function buildAndOrchestrate()
     -- MAIN GUI
     local mainLayer = Instance.new("ScreenGui", targetParent)
-    mainLayer.Name = "PULPI_GUI_V13"
+    mainLayer.Name = "PULPI_GUI_V12"
     mainLayer.IgnoreGuiInset = true 
 
     local menuBase = Instance.new(UIConfig.Type, mainLayer)
@@ -829,7 +824,7 @@ local function buildAndOrchestrate()
     -- TK GUI (PANEL FLING MANUAL)
     -- ==========================================
     local tkGui = Instance.new("ScreenGui", targetParent)
-    tkGui.Name = "TK_GUI_V13"
+    tkGui.Name = "TK_GUI_V12"
     tkGui.IgnoreGuiInset = true 
     tkGui.Enabled = true
 
@@ -955,7 +950,7 @@ local function buildAndOrchestrate()
     -- HUNT GUI (LISTA DE JUGADORES INTERACTIVA)
     -- ==========================================
     local huntGui = Instance.new("ScreenGui", targetParent)
-    huntGui.Name = "HUNT_GUI_V13"
+    huntGui.Name = "HUNT_GUI_V12"
     huntGui.IgnoreGuiInset = true 
 
     local huntPanel = Instance.new("Frame", huntGui)
@@ -986,6 +981,7 @@ local function buildAndOrchestrate()
     
     applyMinimizeSystem(huntPanel, UIConfig.HuntSize, UIConfig.TkMinSize, huntContent)
 
+    -- Botón de refrescar lista
     local btnRefresh = Instance.new("TextButton", huntContent)
     btnRefresh.Size = UDim2.fromScale(0.9, 0.15)
     btnRefresh.Position = UDim2.fromScale(0.05, 0)
@@ -996,6 +992,7 @@ local function buildAndOrchestrate()
     btnRefresh.TextScaled = true
     Instance.new("UICorner", btnRefresh).CornerRadius = UDim.new(0,8)
 
+    -- Scroll de Jugadores
     local playerScroll = Instance.new("ScrollingFrame", huntContent)
     playerScroll.Size = UDim2.fromScale(0.9, 0.55)
     playerScroll.Position = UDim2.fromScale(0.05, 0.2)
@@ -1328,4 +1325,4 @@ else
     runIntro(buildAndOrchestrate)
 end
 
-print("🐙 PULPI V13.5 | ANNOUNCER SYSTEM LOADED")
+print("🐙 PULPI V13.")
