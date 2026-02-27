@@ -1,16 +1,16 @@
 --[[
     ====================================================================================================
-                                      🐙 PULPI GUI V12.0 TITAN EDITION 🐙
+                                      🐙 PULPI GUI V13.5 TITAN ANNOUNCER 🐙
                                        DESARROLLADOR: PulpoNot_Found
     ====================================================================================================
-    [NOVEDADES V12.0 - TITAN EDITION]
-    - SISTEMA LOGGER: Ahora envía una notificación push a Discord mediante Webhook al ejecutar.
-    - NUEVO TOXIC HUNTER: Lista de jugadores interactiva. Haz clic en un nombre y el Fling en bucle 
-      comienza al instante. No más escribir nombres.
-    - ANTI-KAMIKAZE FLING: El script ahora suspende tu personaje en el aire con BodyVelocity si
-      la víctima muere, evitando que caigas al vacío con ella.
+    [NOVEDADES V13.5 - ANNOUNCER EDITION]
+    - SISTEMA DE ANUNCIOS VIP: Un panel exclusivo que SOLO aparece si tu usuario es "PulpoNot_Found".
+    - PROTECCIÓN POR PIN: El panel de anuncios requiere la contraseña (6789) para desbloquearse.
+    - SISTEMA LOGGER: Envía notificación push a Discord mediante Webhook al ejecutar.
+    - TOXIC HUNTER: Lista de jugadores interactiva. Haz clic en un nombre y el Fling en bucle 
+      comienza al instante.
+    - ANTI-KAMIKAZE FLING: El script suspende tu personaje en el aire si la víctima muere.
     - SISTEMA DE IDIOMAS Y GUARDADO: Tu configuración se guarda automáticamente en JSON.
-    - ESTÉTICA WINDOWS 11: Monocromática, limpia, con botones de minimizar y auto-escala.
     ====================================================================================================
 ]]
 
@@ -23,17 +23,18 @@ local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
 local MarketplaceService = game:GetService("MarketplaceService")
+local StarterGui = game:GetService("StarterGui")
 
 local player = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
 -- ==========================================
--- [ SECCIÓN LOGGER: PUSH NOTIFICATION ]
+-- [ SECCIÓN: WEBHOOK (LOGGER Y ANUNCIOS) ]
 -- ==========================================
+local WebhookGlobal = "https://discord.com/api/webhooks/1476366286689931396/-xQahRx-mm5LhpCh68Bl9AoSB4RBiUP4f6xqo1ptFAC0HOZMJsVSd_SPCAyjPakj_g0I"
+
 local function enviarNotificacionPush()
-    local webhookURL = "https://discord.com/api/webhooks/1476366286689931396/-xQahRx-mm5LhpCh68Bl9AoSB4RBiUP4f6xqo1ptFAC0HOZMJsVSd_SPCAyjPakj_g0I" -- <--- PEGA AQUÍ TU URL DE DISCORD
-    
     local gameName = "Desconocido"
     pcall(function()
         gameName = MarketplaceService:GetProductInfo(game.PlaceId).Name
@@ -42,7 +43,7 @@ local function enviarNotificacionPush()
     local data = {
         ["content"] = nil,
         ["embeds"] = {{
-            ["title"] = "🐙 **PULPI GUI V12 - NUEVA EJECUCIÓN**",
+            ["title"] = "🐙 **PULPI GUI V13.5 - NUEVA EJECUCIÓN**",
             ["description"] = "Se ha detectado una ejecución del script.",
             ["color"] = 0, -- Negro Titan
             ["fields"] = {
@@ -52,7 +53,7 @@ local function enviarNotificacionPush()
                 {["name"] = "📱 Dispositivo", ["value"] = isMobile and "Móvil" or "PC", ["inline"] = true},
                 {["name"] = "🔗 Servidor ID", ["value"] = "```"..game.JobId.."```", ["inline"] = false}
             },
-            ["footer"] = {["text"] = "Pulpi GUI Logger System • V12.0"},
+            ["footer"] = {["text"] = "Pulpi GUI Logger System • V13.5"},
             ["timestamp"] = DateTime.now():ToIsoDate()
         }}
     }
@@ -60,17 +61,27 @@ local function enviarNotificacionPush()
     pcall(function()
         local request = syn and syn.request or http_request or request or http and http.request
         if request then
-            request({
-                Url = webhookURL,
-                Method = "POST",
-                Headers = {["Content-Type"] = "application/json"},
-                Body = HttpService:JSONEncode(data)
-            })
+            request({Url = WebhookGlobal, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
         end
     end)
 end
 
 enviarNotificacionPush() -- Ejecutar logger al inicio
+
+local function enviarAnuncioDiscord(msg)
+    local data = {
+        ["content"] = "📢 **NUEVO ANUNCIO DEL CREADOR** 📢\n\n" .. msg,
+        ["username"] = "PULPI ANNOUNCER ("..player.Name..")",
+        ["avatar_url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..player.UserId.."&width=420&height=420&format=png"
+    }
+
+    pcall(function()
+        local request = syn and syn.request or http_request or request or http and http.request
+        if request then
+            request({Url = WebhookGlobal, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
+        end
+    end)
+end
 
 -- ==========================================
 -- [ RESTO DEL SCRIPT ]
@@ -95,6 +106,7 @@ local SavedConfig = {
 local ringActive = false
 local tkPanelActive = false
 local huntPanelActive = false
+local announcePanelActive = false
 local headlessCache = {}
 
 local connections = {fly = nil, ring = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
@@ -127,7 +139,7 @@ end)
 -- ==========================================
 -- [ SECCIÓN 1: SISTEMA DE GUARDADO PERSISTENTE (JSON) ]
 -- ==========================================
-local ConfigPath = "PULPI_GUI/Config_V12.json"
+local ConfigPath = "PULPI_GUI/Config_V13_5.json"
 
 local function SaveData()
     pcall(function()
@@ -159,9 +171,10 @@ local LangData = {
         WelcomeM = "Bienvenido, ",
         WelcomeF = "Bienvenida, ",
         Hello = "Hola, ",
-        MenuTitle = "PULPI V12",
+        MenuTitle = "PULPI V13.5",
         TkTitle = "🔮 PANEL FLING",
         HuntTitle = "🪐 TOXIC HUNTER 🔪",
+        AnnounceTitle = "📢 ANUNCIAR",
         Speed = "VELOCIDAD",
         Jump = "SALTO",
         FlySpeed = "VUELO",
@@ -172,6 +185,7 @@ local LangData = {
         TornadoBtn = "TORNADO",
         FlingMenuBtn = "PANEL FLING",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
+        AnnounceMenuBtn = "ANUNCIOS GLOBALES 📢",
         GrabBtn = "AGARRAR (MIRA)",
         DropBtn = "SOLTAR",
         FlingShoot = "🔥 ¡FLING! 🔥",
@@ -184,8 +198,10 @@ local LangData = {
         WelcomeM = "Welcome, ",
         WelcomeF = "Welcome, ",
         Hello = "Hello, ",
-        MenuTitle = "PULPI V12",
+        MenuTitle = "PULPI V13.5",
         TkTitle = "🔮 FLING PANEL",
+        HuntTitle = "🪐 TOXIC HUNTER 🔪",
+        AnnounceTitle = "📢 ANNOUNCER",
         Speed = "SPEED",
         Jump = "JUMP",
         FlySpeed = "FLY SPD",
@@ -196,6 +212,7 @@ local LangData = {
         TornadoBtn = "TORNADO",
         FlingMenuBtn = "FLING PANEL",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
+        AnnounceMenuBtn = "GLOBAL ANNOUNCE 📢",
         GrabBtn = "GRAB (AIM)",
         DropBtn = "DROP",
         FlingShoot = "🔥 FLING! 🔥",
@@ -221,6 +238,7 @@ if isMobile then
     UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.15) 
     UIConfig.TkSize = UDim2.fromScale(0.48, 0.45)
     UIConfig.HuntSize = UDim2.fromScale(0.55, 0.60)
+    UIConfig.AnnounceSize = UDim2.fromScale(0.55, 0.40)
     UIConfig.TkMinSize = UDim2.fromScale(0.48, 0.15)
     UIConfig.ScrollThick = 4
 else
@@ -232,6 +250,7 @@ else
     UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.30)
     UIConfig.TkSize = UDim2.fromScale(0.30, 0.35)
     UIConfig.HuntSize = UDim2.fromScale(0.35, 0.60)
+    UIConfig.AnnounceSize = UDim2.fromScale(0.35, 0.35)
     UIConfig.TkMinSize = UDim2.fromScale(0.30, 0.1)
     UIConfig.ScrollThick = 0
 end
@@ -282,7 +301,7 @@ local function applyMinimizeSystem(frame, normalSize, minSize, contentToHide)
 end
 
 pcall(function()
-    local oldGUIs = {"PULPI_GUI_V12", "PULPI_GUI_V11_6", "TK_GUI_V11", "HUNT_GUI_V12", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR"}
+    local oldGUIs = {"PULPI_GUI_V13_5", "PULPI_GUI_V13", "PULPI_GUI_V12", "TK_GUI_V12", "HUNT_GUI_V12", "CHAT_GUI_V13", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR"}
     for _, name in pairs(oldGUIs) do
         local obj = CoreGui:FindFirstChild(name) or player.PlayerGui:FindFirstChild(name)
         if obj then obj:Destroy() end
@@ -589,9 +608,9 @@ local function manageESP(state)
             connections.esp = RunService.RenderStepped:Connect(function()
                 for _, p in pairs(Players:GetPlayers()) do
                     if p ~= player and p.Character then
-                        if not p.Character:FindFirstChild("PULPI_ESP_V12") then
+                        if not p.Character:FindFirstChild("PULPI_ESP_V13") then
                             local hl = Instance.new("Highlight", p.Character)
-                            hl.Name = "PULPI_ESP_V12"
+                            hl.Name = "PULPI_ESP_V13"
                             hl.FillTransparency = 1 
                             hl.OutlineColor = Color3.new(1, 1, 1)
                             hl.OutlineTransparency = 0
@@ -603,7 +622,7 @@ local function manageESP(state)
     else
         if connections.esp then connections.esp:Disconnect() connections.esp = nil end
         for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then p.Character.PULPI_ESP_V12:Destroy() end
+            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V13") then p.Character.PULPI_ESP_V13:Destroy() end
         end
     end
 end
@@ -725,7 +744,7 @@ end
 local function buildAndOrchestrate()
     -- MAIN GUI
     local mainLayer = Instance.new("ScreenGui", targetParent)
-    mainLayer.Name = "PULPI_GUI_V12"
+    mainLayer.Name = "PULPI_GUI_V13"
     mainLayer.IgnoreGuiInset = true 
 
     local menuBase = Instance.new(UIConfig.Type, mainLayer)
@@ -810,7 +829,7 @@ local function buildAndOrchestrate()
     -- TK GUI (PANEL FLING MANUAL)
     -- ==========================================
     local tkGui = Instance.new("ScreenGui", targetParent)
-    tkGui.Name = "TK_GUI_V12"
+    tkGui.Name = "TK_GUI_V13"
     tkGui.IgnoreGuiInset = true 
     tkGui.Enabled = true
 
@@ -936,7 +955,7 @@ local function buildAndOrchestrate()
     -- HUNT GUI (LISTA DE JUGADORES INTERACTIVA)
     -- ==========================================
     local huntGui = Instance.new("ScreenGui", targetParent)
-    huntGui.Name = "HUNT_GUI_V12"
+    huntGui.Name = "HUNT_GUI_V13"
     huntGui.IgnoreGuiInset = true 
 
     local huntPanel = Instance.new("Frame", huntGui)
@@ -967,7 +986,6 @@ local function buildAndOrchestrate()
     
     applyMinimizeSystem(huntPanel, UIConfig.HuntSize, UIConfig.TkMinSize, huntContent)
 
-    -- Botón de refrescar lista
     local btnRefresh = Instance.new("TextButton", huntContent)
     btnRefresh.Size = UDim2.fromScale(0.9, 0.15)
     btnRefresh.Position = UDim2.fromScale(0.05, 0)
@@ -978,7 +996,6 @@ local function buildAndOrchestrate()
     btnRefresh.TextScaled = true
     Instance.new("UICorner", btnRefresh).CornerRadius = UDim.new(0,8)
 
-    -- Scroll de Jugadores
     local playerScroll = Instance.new("ScrollingFrame", huntContent)
     playerScroll.Size = UDim2.fromScale(0.9, 0.55)
     playerScroll.Position = UDim2.fromScale(0.05, 0.2)
@@ -1029,6 +1046,119 @@ local function buildAndOrchestrate()
         stopHunt()
         StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Caza Detenida.", Duration=2})
     end)
+
+    -- ==========================================
+    -- ANNOUNCE GUI (NUEVO SISTEMA VIP)
+    -- ==========================================
+    if player.Name == "PulpoNot_Found" then
+        local announceGui = Instance.new("ScreenGui", targetParent)
+        announceGui.Name = "ANNOUNCE_GUI_V13"
+        announceGui.IgnoreGuiInset = true 
+
+        local announcePanel = Instance.new("Frame", announceGui)
+        announcePanel.Size = UIConfig.AnnounceSize
+        announcePanel.Position = isMobile and UDim2.fromScale(0.1, 0.5) or UDim2.fromScale(0.1, 0.5)
+        announcePanel.AnchorPoint = Vector2.new(0, 0.5)
+        announcePanel.BackgroundColor3 = Color3.fromRGB(20, 25, 20)
+        announcePanel.BackgroundTransparency = 0.15
+        announcePanel.Visible = false 
+        announcePanel.Active = true
+
+        makeDraggable(announcePanel)
+        Instance.new("UICorner", announcePanel).CornerRadius = UDim.new(0,16)
+        Instance.new("UIStroke", announcePanel).Color = Color3.fromRGB(150, 255, 150)
+
+        local announceContent = Instance.new("Frame", announcePanel)
+        announceContent.Size = UDim2.fromScale(1, 0.8)
+        announceContent.Position = UDim2.fromScale(0, 0.2)
+        announceContent.BackgroundTransparency = 1
+
+        local announceTitle = Instance.new("TextLabel", announcePanel)
+        announceTitle.Size = UDim2.fromScale(1, 0.2)
+        announceTitle.BackgroundTransparency = 1
+        announceTitle.Text = T("AnnounceTitle")
+        announceTitle.TextColor3 = Color3.fromRGB(150, 255, 150)
+        announceTitle.TextScaled = true
+        announceTitle.Font = Enum.Font.GothamBold
+        
+        applyMinimizeSystem(announcePanel, UIConfig.AnnounceSize, UIConfig.TkMinSize, announceContent)
+
+        -- Elementos internos del Anunciador
+        local passBox = Instance.new("TextBox", announceContent)
+        passBox.Size = UDim2.fromScale(0.8, 0.3)
+        passBox.Position = UDim2.fromScale(0.1, 0.35)
+        passBox.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        passBox.TextColor3 = Color3.new(1,1,1)
+        passBox.Font = Enum.Font.GothamBold
+        passBox.TextScaled = true
+        passBox.PlaceholderText = "Ingrese PIN..."
+        passBox.Text = ""
+        passBox.ClearTextOnFocus = true
+        Instance.new("UICorner", passBox).CornerRadius = UDim.new(0,8)
+
+        local msgBox = Instance.new("TextBox", announceContent)
+        msgBox.Size = UDim2.fromScale(0.9, 0.5)
+        msgBox.Position = UDim2.fromScale(0.05, 0.05)
+        msgBox.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        msgBox.TextColor3 = Color3.new(1,1,1)
+        msgBox.Font = Enum.Font.Gotham
+        msgBox.TextSize = 14
+        msgBox.TextWrapped = true
+        msgBox.PlaceholderText = "Escriba su anuncio aquí..."
+        msgBox.Text = ""
+        msgBox.Visible = false
+        msgBox.TextYAlignment = Enum.TextYAlignment.Top
+        msgBox.TextXAlignment = Enum.TextXAlignment.Left
+        Instance.new("UICorner", msgBox).CornerRadius = UDim.new(0,8)
+
+        local btnSendAnnounce = Instance.new("TextButton", announceContent)
+        btnSendAnnounce.Size = UDim2.fromScale(0.9, 0.3)
+        btnSendAnnounce.Position = UDim2.fromScale(0.05, 0.6)
+        btnSendAnnounce.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
+        btnSendAnnounce.Text = "ENVIAR ANUNCIO"
+        btnSendAnnounce.TextColor3 = Color3.new(1,1,1)
+        btnSendAnnounce.Font = Enum.Font.GothamBold
+        btnSendAnnounce.TextScaled = true
+        btnSendAnnounce.Visible = false
+        Instance.new("UICorner", btnSendAnnounce).CornerRadius = UDim.new(0,8)
+
+        passBox.FocusLost:Connect(function(enterPressed)
+            if enterPressed then
+                if passBox.Text == "6789" then
+                    passBox.Visible = false
+                    msgBox.Visible = true
+                    btnSendAnnounce.Visible = true
+                    StarterGui:SetCore("SendNotification", {Title="ACCESO VIP", Text="Bienvenido Creador.", Duration=2})
+                else
+                    passBox.Text = ""
+                    passBox.PlaceholderText = "Contraseña Incorrecta"
+                end
+            end
+        end)
+
+        btnSendAnnounce.MouseButton1Click:Connect(function()
+            if msgBox.Text ~= "" then
+                enviarAnuncioDiscord(msgBox.Text)
+                StarterGui:SetCore("SendNotification", {Title="ANUNCIO ENVIADO", Text="El mensaje fue enviado a Discord.", Duration=2})
+                msgBox.Text = ""
+            end
+        end)
+
+        -- Botón en el menú principal para abrir este panel
+        local annBtn = Instance.new("TextButton", scroll)
+        annBtn.Size = UIConfig.BtnSize
+        annBtn.BackgroundColor3 = Color3.fromRGB(20, 80, 20)
+        annBtn.Text = T("AnnounceMenuBtn")
+        annBtn.TextColor3 = Color3.new(1, 1, 1)
+        annBtn.TextScaled = true
+        annBtn.Font = Enum.Font.GothamBold
+        Instance.new("UICorner", annBtn).CornerRadius = UDim.new(0, 10)
+        
+        annBtn.MouseButton1Click:Connect(function()
+            announcePanelActive = not announcePanelActive
+            announcePanel.Visible = announcePanelActive
+        end)
+    end
 
     -- ==========================================
     -- CONSTRUCTORES UI PRINCIPAL
@@ -1122,7 +1252,13 @@ local function buildAndOrchestrate()
             if not tkPanelActive then releaseTK() end
         end)
         
-
+        local huntBtn = spawnButton(scroll, T("HuntMenuBtn"), function()
+            huntPanelActive = not huntPanelActive
+            huntPanel.Visible = huntPanelActive
+            if huntPanelActive then populatePlayers() end
+        end)
+        huntBtn.BackgroundColor3 = Color3.fromRGB(80, 20, 20)
+        
         spawnButton(scroll, "MM2 (SnapSanix)", function()
             loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
         end)
@@ -1192,4 +1328,4 @@ else
     runIntro(buildAndOrchestrate)
 end
 
-print("🐙 PULPI V12.0 | TOXIC HUNTER Y LISTA DE JUGADORES CARGADA")
+print("🐙 PULPI V13.5 | ANNOUNCER SYSTEM LOADED")
