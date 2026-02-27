@@ -1,3 +1,19 @@
+--[[
+    ====================================================================================================
+                                      🐙 PULPI GUI V13.5 TITAN ANNOUNCER 🐙
+                                       DESARROLLADOR: PulpoNot_Found
+    ====================================================================================================
+    [NOVEDADES V13.5 - THE PERFECT MERGE]
+    - INTEGRACIÓN EXACTA: Super Ring Parts v4 (by lukas) inyectado literalmente sin recortar nada.
+      Incluye su propio chat bypass, sonidos, ForcePart y sistema de Network.
+    - SLIDERS MANUALES: Ahora puedes tocar/hacer clic en el texto de los sliders (Speed, Jump, Fly, etc)
+      para escribir el número exacto con tu teclado/móvil, además de poder arrastrarlos.
+    - SISTEMA DE ANUNCIOS VIP Y LOGGER DE DISCORD.
+    - TOXIC HUNTER Y ANTI-KAMIKAZE FLING.
+    - AUTO-EXECUTE UNIVERSAL: No Fall Damage de Xeno integrado para funcionar en TODOS los juegos.
+    ====================================================================================================
+]]
+
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -89,13 +105,12 @@ local SavedConfig = {
 }
 
 -- Estados Volátiles
-local ringActive = false
 local tkPanelActive = false
 local huntPanelActive = false
 local announcePanelActive = false
 local headlessCache = {}
 
-local connections = {fly = nil, ring = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
+local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
 
 -- ==========================================
 -- [ SECCIÓN 0: AUTO-EXECUTE (NO FALL DAMAGE UNIVERSAL FE) ]
@@ -177,10 +192,10 @@ local LangData = {
         Radius = "RADIO",
         Headless = "FE HEADLESS",
         FlyBtn = "VOLAR",
-        EspBtn = "ESP (BLANCO)",
+        EspBtn = "ESP",
         TornadoBtn = "Ring🪐",
         FlingMenuBtn = "PANEL FLING",
-        HuntMenuBtn = "TOXIC HUNTER 🪐",
+        HuntMenuBtn = "Perseguir Toxicos🪐",
         AnnounceMenuBtn = "ANUNCIOS GLOBALES 📢",
         GrabBtn = "AGARRAR (MIRA)",
         DropBtn = "SOLTAR",
@@ -195,16 +210,16 @@ local LangData = {
         WelcomeF = "Welcome, ",
         Hello = "Hello, ",
         MenuTitle = "PULPI V13.5",
-        TkTitle = "🔮 FLING PANEL",
+        TkTitle = "🔮 FLING ",
         HuntTitle = "🪐 TOXIC HUNTER 🔪",
         AnnounceTitle = "📢 ANNOUNCER",
         Speed = "SPEED",
         Jump = "JUMP",
-        FlySpeed = "FLY SPD",
+        FlySpeed = "FLY SPEED",
         Radius = "RADIUS",
         Headless = "FE HEADLESS",
         FlyBtn = "FLY",
-        EspBtn = "ESP (WHITE)",
+        EspBtn = "ESP ",
         TornadoBtn = "Ring 🪐",
         FlingMenuBtn = "FLING PANEL",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
@@ -463,13 +478,28 @@ local function runIntro(onComplete)
     if onComplete then onComplete() end
 end
 
--- ==========================================
--- [ SECCIÓN 5: LÓGICAS FÍSICAS (FLY, TK, ESP, RING V4, HEADLESS) ]
--- ==========================================
+-- ==============================================================================
+-- [ SECCIÓN 5: LÓGICA DE SUPER RING V4 (PLAGIADO LITERLAMENTE DE TU CÓDIGO) ]
+-- ==============================================================================
+local LocalPlayer = player
+local height = 100
+local rotationSpeed = 1
+local attractionStrength = 1000
+local ringPartsEnabled = false
 
--- ==========================================
--- [ LÓGICA DE SUPER RING V4 (PLAGIADO E INTEGRADO) ]
--- ==========================================
+local function playSound(soundId)
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://" .. soundId
+    sound.Parent = SoundService
+    sound:Play()
+    sound.Ended:Connect(function()
+        sound:Destroy()
+    end)
+end
+
+-- Play initial sound
+playSound("2865227271")
+
 if not getgenv().Network then
     getgenv().Network = {
         BaseParts = {},
@@ -485,9 +515,9 @@ if not getgenv().Network then
     end
 
     local function EnablePartControl()
-        player.ReplicationFocus = Workspace
+        LocalPlayer.ReplicationFocus = Workspace
         RunService.Heartbeat:Connect(function()
-            pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+            pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
             for _, Part in pairs(Network.BaseParts) do
                 if Part:IsDescendantOf(Workspace) then
                     Part.Velocity = Network.Velocity
@@ -495,26 +525,33 @@ if not getgenv().Network then
             end
         end)
     end
+
     EnablePartControl()
 end
 
-local folderRing = Instance.new("Folder", Workspace)
-local partRing = Instance.new("Part", folderRing)
-local Attachment1Ring = Instance.new("Attachment", partRing)
-partRing.Anchored = true
-partRing.CanCollide = false
-partRing.Transparency = 1
+local FolderRing = Instance.new("Folder", Workspace)
+local PartRing = Instance.new("Part", FolderRing)
+local Attachment1Ring = Instance.new("Attachment", PartRing)
+PartRing.Anchored = true
+PartRing.CanCollide = false
+PartRing.Transparency = 1
 
-local function ForcePartRing(v)
+local function ForcePart(v)
     if v:IsA("Part") and not v.Anchored and not v.Parent:FindFirstChild("Humanoid") and not v.Parent:FindFirstChild("Head") and v.Name ~= "Handle" then
         for _, x in next, v:GetChildren() do
             if x:IsA("BodyAngularVelocity") or x:IsA("BodyForce") or x:IsA("BodyGyro") or x:IsA("BodyPosition") or x:IsA("BodyThrust") or x:IsA("BodyVelocity") or x:IsA("RocketPropulsion") then
                 x:Destroy()
             end
         end
-        if v:FindFirstChild("Attachment") then v:FindFirstChild("Attachment"):Destroy() end
-        if v:FindFirstChild("AlignPosition") then v:FindFirstChild("AlignPosition"):Destroy() end
-        if v:FindFirstChild("Torque") then v:FindFirstChild("Torque"):Destroy() end
+        if v:FindFirstChild("Attachment") then
+            v:FindFirstChild("Attachment"):Destroy()
+        end
+        if v:FindFirstChild("AlignPosition") then
+            v:FindFirstChild("AlignPosition"):Destroy()
+        end
+        if v:FindFirstChild("Torque") then
+            v:FindFirstChild("Torque"):Destroy()
+        end
         v.CanCollide = false
         local Torque = Instance.new("Torque", v)
         Torque.Torque = Vector3.new(100000, 100000, 100000)
@@ -529,9 +566,12 @@ local function ForcePartRing(v)
     end
 end
 
-local function RetainPartRing(Part)
+local function RetainPart(Part)
     if Part:IsA("BasePart") and not Part.Anchored and Part:IsDescendantOf(Workspace) then
-        if Part.Parent == player.Character or Part:IsDescendantOf(player.Character) then return false end
+        if Part.Parent == LocalPlayer.Character or Part:IsDescendantOf(LocalPlayer.Character) then
+            return false
+        end
+
         Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
         Part.CanCollide = false
         return true
@@ -539,63 +579,84 @@ local function RetainPartRing(Part)
     return false
 end
 
-local activeRingParts = {}
-local function addRingPart(part)
-    if RetainPartRing(part) then
-        if not table.find(activeRingParts, part) then table.insert(activeRingParts, part) end
+local partsRing = {}
+local function addPart(part)
+    if RetainPart(part) then
+        if not table.find(partsRing, part) then
+            table.insert(partsRing, part)
+        end
     end
 end
-local function removeRingPart(part)
-    local idx = table.find(activeRingParts, part)
-    if idx then table.remove(activeRingParts, idx) end
+
+local function removePart(part)
+    local index = table.find(partsRing, part)
+    if index then
+        table.remove(partsRing, index)
+    end
 end
 
-for _, part in pairs(Workspace:GetDescendants()) do addRingPart(part) end
-Workspace.DescendantAdded:Connect(addRingPart)
-Workspace.DescendantRemoving:Connect(removeRingPart)
+for _, part in pairs(Workspace:GetDescendants()) do
+    addPart(part)
+end
 
-local function toggleRing()
-    ringActive = not ringActive
-    if ringActive then
-        -- Play initial sound
-        local sound = Instance.new("Sound")
-        sound.SoundId = "rbxassetid://2865227271"
-        sound.Parent = SoundService
-        sound:Play()
-        sound.Ended:Connect(function() sound:Destroy() end)
-          
+Workspace.DescendantAdded:Connect(addPart)
+Workspace.DescendantRemoving:Connect(removePart)
 
-        local height = 100
-        local rotationSpeed = 1
-        local attractionStrength = 1000
-
-        connections.ring = RunService.Heartbeat:Connect(function()
-            local humanoidRootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            if humanoidRootPart then
-                local tornadoCenter = humanoidRootPart.Position
-                for _, part in pairs(activeRingParts) do
-                    if part.Parent and not part.Anchored then
-                        local pos = part.Position
-                        local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
-                        local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
-                        local newAngle = angle + math.rad(rotationSpeed)
-                        local targetPos = Vector3.new(
-                            tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance),
-                            tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
-                            tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
-                        )
-                        local directionToTarget = (targetPos - part.Position).unit
-                        part.Velocity = directionToTarget * attractionStrength
-                    end
-                end
+RunService.Heartbeat:Connect(function()
+    if not ringPartsEnabled then return end
+    
+    local humanoidRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        local tornadoCenter = humanoidRootPart.Position
+        for _, part in pairs(partsRing) do
+            if part.Parent and not part.Anchored then
+                local pos = part.Position
+                local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
+                local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
+                local newAngle = angle + math.rad(rotationSpeed)
+                local targetPos = Vector3.new(
+                    tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance), -- Conectado al Slider GUI
+                    tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
+                    tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
+                )
+                local directionToTarget = (targetPos - part.Position).unit
+                part.Velocity = directionToTarget * attractionStrength
             end
-        end)
+        end
+    end
+end)
+
+local function SendChatMessage(message)
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        local textChannel = TextChatService.TextChannels.RBXGeneral
+        textChannel:SendAsync(message)
     else
-        if connections.ring then connections.ring:Disconnect() connections.ring = nil end
+        game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
     end
 end
 
--- ==========================================
+local function toggleTornado()
+    ringPartsEnabled = not ringPartsEnabled
+    if ringPartsEnabled then
+        playSound("12221967")
+        local userId = Players:GetUserIdFromNameAsync("PulpoNot_Found")
+        local thumbType = Enum.ThumbnailType.HeadShot
+        local thumbSize = Enum.ThumbnailSize.Size420x420
+        local content, isReady = pcall(function() return Players:GetUserThumbnailAsync(userId, thumbType, thumbSize) end)
+        StarterGui:SetCore("SendNotification", {
+            Title = "Super ring parts V4",
+            Text = "enjoy",
+            Icon = isReady and content or nil,
+            Duration = 5
+        })
+        
+    else
+        playSound("12221967")
+    end
+end
+-- ==============================================================================
+-- [ FIN DEL CÓDIGO RING PORT]
+-- ==============================================================================
 
 local function applySpeedAndJump()
     local char = player.Character
@@ -1268,7 +1329,7 @@ local function buildAndOrchestrate()
     end
 
     -- ==========================================
-    -- CONSTRUCTORES UI PRINCIPAL
+    -- CONSTRUCTORES UI PRINCIPAL (CON SLIDER MANUAL Y TEXTBOX)
     -- ==========================================
     local function spawnButton(parentUI, name, callback)
         local btn = Instance.new("TextButton", parentUI)
@@ -1290,18 +1351,23 @@ local function buildAndOrchestrate()
         local container = Instance.new("Frame", scroll)
         container.Size = UIConfig.SliderContSize
         container.BackgroundTransparency = 1
-        local label = Instance.new("TextLabel", container)
+        
+        -- AHORA ES UN TEXTBOX PARA PODER ESCRIBIR
+        local label = Instance.new("TextBox", container)
         label.Size = UDim2.fromScale(1, 0.45)
         label.BackgroundTransparency = 1
         label.TextColor3 = Color3.new(1,1,1)
         label.TextScaled = true
         label.Font = Enum.Font.Gotham
         label.Text = name .. ": " .. start
+        label.ClearTextOnFocus = true -- Se borra al tocar para facilitar escribir
+        
         local track = Instance.new("Frame", container)
         track.Size = UIConfig.SliderTrackSize
         track.Position = UDim2.fromScale(0, 0.55)
         track.BackgroundColor3 = Color3.fromRGB(40,40,60)
         Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
+        
         local fill = Instance.new("Frame", track)
         fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
         fill.Size = UDim2.fromScale((start - min)/(max - min), 1)
@@ -1334,6 +1400,24 @@ local function buildAndOrchestrate()
                 dragging = false 
             end
         end)
+        
+        -- Lógica al terminar de escribir en el TextBox
+        label.FocusLost:Connect(function()
+            local matchNum = label.Text:match("%d+") -- Extrae solo números
+            local num = tonumber(matchNum)
+            
+            if num then
+                local finalVal = math.floor(math.clamp(num, min, max))
+                label.Text = name .. ": " .. finalVal
+                fill.Size = UDim2.fromScale((finalVal - min)/(max - min), 1)
+                SavedConfig[configKey] = finalVal
+                callback(finalVal)
+                SaveData()
+            else
+                -- Si no puso un número válido, restaura el texto
+                label.Text = name .. ": " .. SavedConfig[configKey]
+            end
+        end)
     end
 
     -- ==========================================
@@ -1345,12 +1429,12 @@ local function buildAndOrchestrate()
         spawnSlider("WalkSpeed", 16, 400, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
         spawnSlider("JumpPower", 50, 500, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
         spawnSlider("FlySpeed", 30, 800, function(v) flySpeed = v end)
-        spawnSlider("RingRadius", 5, 1000, function(v) SavedConfig.RingRadius = v end)
+        spawnSlider("RingRadius", 5, 1000, function(v) SavedConfig.RingRadius = v end) -- Vinculado a la variable
         
         spawnButton(scroll, T("Headless"), function() toggleHeadlessFE() end)
         spawnButton(scroll, T("FlyBtn"), function() manageFlight() end)
         spawnButton(scroll, T("EspBtn"), function() manageESP() end)
-        spawnButton(scroll, T("TornadoBtn"), toggleRing) -- Reemplazado a Super Ring V4
+        spawnButton(scroll, T("TornadoBtn"), toggleTornado) -- ÉSTE AHORA ACTIVA EL SUPER RING V4
         
         spawnButton(scroll, T("FlingMenuBtn"), function()
             tkPanelActive = not tkPanelActive
@@ -1435,4 +1519,4 @@ else
     runIntro(buildAndOrchestrate)
 end
 
-print("🐙 PULPI V13.5 | TITAN ANNOUNCER & SUPER RING V4 LOADED")
+print("🐙 PULPI V13.5 | TITAN ANNOUNCER + SUPER RING V4 LOADED")
