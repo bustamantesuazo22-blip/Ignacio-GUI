@@ -1,18 +1,3 @@
---[[
-    ====================================================================================================
-                                      🐙 PULPI GUI V13.5 TITAN ANNOUNCER 🐙
-                                       DESARROLLADOR: PulpoNot_Found
-    ====================================================================================================
-    [NOVEDADES V13.5 - THE PERFECT MERGE]
-    - INTEGRACIÓN EXACTA: Super Ring Parts v4 (by lukas) inyectado literalmente sin recortar nada.
-      Incluye su propio chat bypass, sonidos, ForcePart y sistema de Network.
-    - SLIDERS MANUALES: Ahora puedes tocar/hacer clic en el texto de los sliders (Speed, Jump, Fly, etc)
-      para escribir el número exacto con tu teclado/móvil, además de poder arrastrarlos.
-    - SISTEMA DE ANUNCIOS VIP Y LOGGER DE DISCORD.
-    - TOXIC HUNTER Y ANTI-KAMIKAZE FLING.
-    - AUTO-EXECUTE UNIVERSAL: No Fall Damage de Xeno integrado para funcionar en TODOS los juegos.
-    ====================================================================================================
-]]
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -32,7 +17,25 @@ local cam = Workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
 -- ==========================================
--- [ SECCIÓN: WEBHOOK (LOGGER Y ANUNCIOS) ]
+-- [ LIBRERÍA MATEMÁTICA Y KERNEL ]
+-- ==========================================
+local MathCore = {}
+MathCore.Pi = math.pi
+MathCore.Tau = math.pi * 2
+
+-- [FIX 4] Antes retornaba Vector3.new(inertia, inertia, inertia) lo que causaba rotación
+-- caótica en los 3 ejes. Ahora retorna solo el escalar para aplicarlo únicamente en eje Y.
+function MathCore.CalculateTensorForce(baseFactor)
+    local inertia = (baseFactor ^ 2) * MathCore.Pi
+    return inertia -- escalar, no Vector3
+end
+
+function MathCore.Lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+-- ==========================================
+-- [ WEBHOOK (LOGGER Y ANUNCIOS) ]
 -- ==========================================
 local WebhookGlobal = "https://discord.com/api/webhooks/1476366286689931396/-xQahRx-mm5LhpCh68Bl9AoSB4RBiUP4f6xqo1ptFAC0HOZMJsVSd_SPCAyjPakj_g0I"
 
@@ -47,7 +50,7 @@ local function enviarNotificacionPush()
         ["embeds"] = {{
             ["title"] = "🐙 **PULPI GUI V13.5 - NUEVA EJECUCIÓN**",
             ["description"] = "Se ha detectado una ejecución del script.",
-            ["color"] = 0, -- Negro Titan
+            ["color"] = 0,
             ["fields"] = {
                 {["name"] = "👤 Jugador", ["value"] = player.Name .. " (@" .. player.DisplayName .. ")", ["inline"] = true},
                 {["name"] = "🆔 User ID", ["value"] = "["..player.UserId.."](https://www.roblox.com/users/"..player.UserId.."/profile)", ["inline"] = true},
@@ -68,7 +71,7 @@ local function enviarNotificacionPush()
     end)
 end
 
-enviarNotificacionPush() -- Ejecutar logger al inicio
+enviarNotificacionPush()
 
 local function enviarAnuncioDiscord(msg)
     local data = {
@@ -76,7 +79,6 @@ local function enviarAnuncioDiscord(msg)
         ["username"] = "PULPI ANNOUNCER ("..player.Name..")",
         ["avatar_url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..player.UserId.."&width=420&height=420&format=png"
     }
-
     pcall(function()
         local request = syn and syn.request or http_request or request or http and http.request
         if request then
@@ -86,13 +88,9 @@ local function enviarAnuncioDiscord(msg)
 end
 
 -- ==========================================
--- [ RESTO DEL SCRIPT ]
+-- [ VARIABLES DE ESTADO ]
 -- ==========================================
-
--- Variables de estado
 local menuOpen = false
-
--- Estados de módulos (Guardado JSON)
 local SavedConfig = {
     Lang = "es",
     WalkSpeed = 16,
@@ -104,21 +102,18 @@ local SavedConfig = {
     HeadlessActive = false
 }
 
--- Estados Volátiles
 local tkPanelActive = false
 local huntPanelActive = false
 local announcePanelActive = false
 local headlessCache = {}
-
 local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
 
 -- ==========================================
--- [ SECCIÓN 0: AUTO-EXECUTE (NO FALL DAMAGE UNIVERSAL FE) ]
+-- [ AUTO-EXECUTE: NO FALL DAMAGE UNIVERSAL ]
 -- ==========================================
 task.spawn(function()
-    -- No Fall Damage Universal (Velocity Reset FE) - Xeno 2026
-    pcall(function() setclipboard("https://discord.gg/ypjMw5xmuj") end) -- Opcional: copia discord
-    
+    pcall(function() setclipboard("https://discord.gg/ypjMw5xmuj") end)
+
     local rs = game:GetService("RunService")
     local hb = rs.Heartbeat
     local rsd = rs.RenderStepped
@@ -126,29 +121,32 @@ task.spawn(function()
     local z = Vector3.zero
 
     local function f(c)
-        local r = c:WaitForChild("HumanoidRootPart")
-        if r then
-            local con
-            con = hb:Connect(function()
-                if not r.Parent then
-                    con:Disconnect()
-                end
+        local r = c:WaitForChild("HumanoidRootPart", 5) -- timeout de 5s para no colgar
+        if not r then return end
+        local con
+        con = hb:Connect(function()
+            if not r.Parent then
+                con:Disconnect()
+                return
+            end
+            -- Protegido con pcall para no crashear en FE restrictivo
+            pcall(function()
                 local v = r.AssemblyLinearVelocity
                 r.AssemblyLinearVelocity = z
                 rsd:Wait()
                 r.AssemblyLinearVelocity = v
             end)
-        end
+        end)
     end
 
     f(lp.Character or lp.CharacterAdded:Wait())
     lp.CharacterAdded:Connect(f)
 
-    print("¡NO FALL DAMAGE UNIVERSAL ACTIVADO! Salta libre 🌪️💥")
+    print("¡NO FALL DAMAGE UNIVERSAL ACTIVADO! 🌪️💥")
 end)
 
 -- ==========================================
--- [ SECCIÓN 1: SISTEMA DE GUARDADO PERSISTENTE (JSON) ]
+-- [ SISTEMA DE GUARDADO PERSISTENTE (JSON) ]
 -- ==========================================
 local ConfigPath = "PULPI_GUI/Config_V13_5.json"
 
@@ -210,7 +208,7 @@ local LangData = {
         WelcomeF = "Welcome, ",
         Hello = "Hello, ",
         MenuTitle = "PULPI V13.5",
-        TkTitle = "🔮 FLING ",
+        TkTitle = "🔮 FLING PANEL",
         HuntTitle = "🪐 TOXIC HUNTER 🔪",
         AnnounceTitle = "📢 ANNOUNCER",
         Speed = "SPEED",
@@ -219,7 +217,7 @@ local LangData = {
         Radius = "RADIUS",
         Headless = "FE HEADLESS",
         FlyBtn = "FLY",
-        EspBtn = "ESP ",
+        EspBtn = "ESP",
         TornadoBtn = "Ring 🪐",
         FlingMenuBtn = "FLING PANEL",
         HuntMenuBtn = "TOXIC HUNTER 🪐",
@@ -233,11 +231,13 @@ local LangData = {
 }
 
 local function T(key)
-    return LangData[SavedConfig.Lang][key] or key
+    local lang = SavedConfig.Lang or "es"
+    if not LangData[lang] then lang = "es" end
+    return LangData[lang][key] or key
 end
 
 -- ==========================================
--- [ SECCIÓN 2: CONFIGURACIÓN VISUAL ADAPTATIVA Y DRAGGABLE ]
+-- [ CONFIGURACIÓN VISUAL ADAPTATIVA ]
 -- ==========================================
 local UIConfig = {}
 if isMobile then
@@ -246,7 +246,7 @@ if isMobile then
     UIConfig.MinSize = UDim2.fromScale(0.65, 0.15)
     UIConfig.BtnSize = UDim2.fromScale(0.92, 0.12)
     UIConfig.SliderContSize = UDim2.fromScale(0.92, 0.14)
-    UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.15) 
+    UIConfig.SliderTrackSize = UDim2.fromScale(1, 0.15)
     UIConfig.TkSize = UDim2.fromScale(0.48, 0.45)
     UIConfig.HuntSize = UDim2.fromScale(0.55, 0.60)
     UIConfig.AnnounceSize = UDim2.fromScale(0.55, 0.40)
@@ -301,7 +301,7 @@ local function applyMinimizeSystem(frame, normalSize, minSize, contentToHide)
     minBtn.Font = Enum.Font.GothamBold
     minBtn.TextScaled = true
     Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
-    
+
     local isMinimized = false
     minBtn.MouseButton1Click:Connect(function()
         isMinimized = not isMinimized
@@ -311,6 +311,7 @@ local function applyMinimizeSystem(frame, normalSize, minSize, contentToHide)
     end)
 end
 
+-- Limpiar GUIs anteriores
 pcall(function()
     local oldGUIs = {"PULPI_GUI_V13_5", "PULPI_GUI_V13", "PULPI_GUI_V12", "TK_GUI_V12", "HUNT_GUI_V12", "CHAT_GUI_V13", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR"}
     for _, name in pairs(oldGUIs) do
@@ -325,26 +326,26 @@ end)
 local targetParent = (pcall(function() return CoreGui.Name end)) and CoreGui or player.PlayerGui
 
 -- ==========================================
--- [ SECCIÓN 3: PANTALLA DE SELECCIÓN DE IDIOMA ]
+-- [ PANTALLA DE SELECCIÓN DE IDIOMA ]
 -- ==========================================
 local function showLangSelector(callback)
     local langGui = Instance.new("ScreenGui", targetParent)
     langGui.Name = "LANG_SELECTOR"
     langGui.IgnoreGuiInset = true
     langGui.DisplayOrder = 10000
-    
+
     local bg = Instance.new("Frame", langGui)
     bg.Size = UDim2.fromScale(1, 1)
     bg.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
     bg.BackgroundTransparency = 0.3
-    
+
     local panel = Instance.new("Frame", bg)
     panel.Size = isMobile and UDim2.fromScale(0.6, 0.4) or UDim2.fromScale(0.3, 0.35)
     panel.Position = UDim2.fromScale(0.5, 0.5)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
     Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
-    
+
     local title = Instance.new("TextLabel", panel)
     title.Size = UDim2.fromScale(1, 0.3)
     title.BackgroundTransparency = 1
@@ -352,7 +353,7 @@ local function showLangSelector(callback)
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.GothamBlack
     title.TextScaled = true
-    
+
     local btnEs = Instance.new("TextButton", panel)
     btnEs.Size = UDim2.fromScale(0.8, 0.25)
     btnEs.Position = UDim2.fromScale(0.1, 0.35)
@@ -362,7 +363,7 @@ local function showLangSelector(callback)
     btnEs.Font = Enum.Font.GothamBold
     btnEs.TextScaled = true
     Instance.new("UICorner", btnEs)
-    
+
     local btnEn = Instance.new("TextButton", panel)
     btnEn.Size = UDim2.fromScale(0.8, 0.25)
     btnEn.Position = UDim2.fromScale(0.1, 0.65)
@@ -385,18 +386,18 @@ local function showLangSelector(callback)
 end
 
 -- ==========================================
--- [ SECCIÓN 4: INTRODUCCIÓN CINEMATOGRÁFICA ]
+-- [ INTRODUCCIÓN CINEMATOGRÁFICA ]
 -- ==========================================
 local function runIntro(onComplete)
     local introLayer = Instance.new("ScreenGui", targetParent)
     introLayer.Name = "PULPO_INTRO"
-    introLayer.IgnoreGuiInset = true 
+    introLayer.IgnoreGuiInset = true
     introLayer.DisplayOrder = 9999
 
     local bg = Instance.new("Frame", introLayer)
     bg.Size = UDim2.fromScale(1, 1)
     bg.BackgroundColor3 = Color3.fromRGB(5, 5, 8)
-    bg.BackgroundTransparency = 1 
+    bg.BackgroundTransparency = 1
 
     local centerContainer = Instance.new("Frame", bg)
     centerContainer.Size = UDim2.fromOffset(350, 350)
@@ -411,7 +412,7 @@ local function runIntro(onComplete)
     pfp.BackgroundTransparency = 1
     pfp.ImageTransparency = 1
     pfp.Image = "rbxassetid://0"
-    
+
     task.spawn(function()
         local successId, devId = pcall(function() return Players:GetUserIdFromNameAsync("PulpoNot_Found") end)
         if successId and devId then
@@ -421,7 +422,7 @@ local function runIntro(onComplete)
             if successThumb and thumb then pfp.Image = thumb end
         end
     end)
-    
+
     Instance.new("UICorner", pfp).CornerRadius = UDim.new(1, 0)
     local pfpStroke = Instance.new("UIStroke", pfp)
     pfpStroke.Thickness = 3
@@ -478,9 +479,9 @@ local function runIntro(onComplete)
     if onComplete then onComplete() end
 end
 
--- ==============================================================================
--- [ SECCIÓN 5: LÓGICA DE SUPER RING V4 (PLAGIADO LITERLAMENTE DE TU CÓDIGO) ]
--- ==============================================================================
+-- ==========================================
+-- [ SUPER RING V4 ]
+-- ==========================================
 local LocalPlayer = player
 local height = 100
 local rotationSpeed = 1
@@ -492,12 +493,9 @@ local function playSound(soundId)
     sound.SoundId = "rbxassetid://" .. soundId
     sound.Parent = SoundService
     sound:Play()
-    sound.Ended:Connect(function()
-        sound:Destroy()
-    end)
+    sound.Ended:Connect(function() sound:Destroy() end)
 end
 
--- Play initial sound
 playSound("2865227271")
 
 if not getgenv().Network then
@@ -506,9 +504,11 @@ if not getgenv().Network then
         Velocity = Vector3.new(14.46262424, 14.46262424, 14.46262424)
     }
 
-    Network.RetainPart = function(Part)
+    -- [FIX 2] "Network.RetainPart" → "getgenv().Network.RetainPart"
+    -- Sin getgenv() dentro del bloque if, "Network" no existe como variable local/global accesible
+    getgenv().Network.RetainPart = function(Part)
         if typeof(Part) == "Instance" and Part:IsA("BasePart") and Part:IsDescendantOf(Workspace) then
-            table.insert(Network.BaseParts, Part)
+            table.insert(getgenv().Network.BaseParts, Part)
             Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
             Part.CanCollide = false
         end
@@ -518,10 +518,14 @@ if not getgenv().Network then
         LocalPlayer.ReplicationFocus = Workspace
         RunService.Heartbeat:Connect(function()
             pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
-            for _, Part in pairs(Network.BaseParts) do
-                if Part:IsDescendantOf(Workspace) then
-                    Part.Velocity = Network.Velocity
-                end
+            -- [FIX 3] Part.Velocity (deprecado en Roblox moderno) → AssemblyLinearVelocity
+            -- Además envuelto en pcall por si alguna parte fue destruida entre frames
+            for _, Part in pairs(getgenv().Network.BaseParts) do
+                pcall(function()
+                    if Part:IsDescendantOf(Workspace) then
+                        Part.AssemblyLinearVelocity = getgenv().Network.Velocity
+                    end
+                end)
             end
         end)
     end
@@ -543,15 +547,9 @@ local function ForcePart(v)
                 x:Destroy()
             end
         end
-        if v:FindFirstChild("Attachment") then
-            v:FindFirstChild("Attachment"):Destroy()
-        end
-        if v:FindFirstChild("AlignPosition") then
-            v:FindFirstChild("AlignPosition"):Destroy()
-        end
-        if v:FindFirstChild("Torque") then
-            v:FindFirstChild("Torque"):Destroy()
-        end
+        if v:FindFirstChild("Attachment") then v:FindFirstChild("Attachment"):Destroy() end
+        if v:FindFirstChild("AlignPosition") then v:FindFirstChild("AlignPosition"):Destroy() end
+        if v:FindFirstChild("Torque") then v:FindFirstChild("Torque"):Destroy() end
         v.CanCollide = false
         local Torque = Instance.new("Torque", v)
         Torque.Torque = Vector3.new(100000, 100000, 100000)
@@ -571,7 +569,6 @@ local function RetainPart(Part)
         if Part.Parent == LocalPlayer.Character or Part:IsDescendantOf(LocalPlayer.Character) then
             return false
         end
-
         Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
         Part.CanCollide = false
         return true
@@ -604,67 +601,75 @@ Workspace.DescendantRemoving:Connect(removePart)
 
 RunService.Heartbeat:Connect(function()
     if not ringPartsEnabled then return end
-    
+
     local humanoidRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if humanoidRootPart then
         local tornadoCenter = humanoidRootPart.Position
         for _, part in pairs(partsRing) do
-            if part.Parent and not part.Anchored then
-                local pos = part.Position
-                local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
-                local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
-                local newAngle = angle + math.rad(rotationSpeed)
-                local targetPos = Vector3.new(
-                    tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance), -- Conectado al Slider GUI
-                    tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
-                    tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
-                )
-                local directionToTarget = (targetPos - part.Position).unit
-                part.Velocity = directionToTarget * attractionStrength
-            end
+            -- [FIX 7] pcall para que si la parte es destruida entre frames no crashee el loop
+            pcall(function()
+                if part.Parent and not part.Anchored then
+                    local pos = part.Position
+                    local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
+                    local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
+                    local newAngle = angle + math.rad(rotationSpeed)
+                    local targetPos = Vector3.new(
+                        tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance),
+                        tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
+                        tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
+                    )
+                    local directionToTarget = (targetPos - part.Position).unit
+                    part.Velocity = directionToTarget * attractionStrength
+                end
+            end)
         end
     end
 end)
 
 local function SendChatMessage(message)
-    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
-        local textChannel = TextChatService.TextChannels.RBXGeneral
-        textChannel:SendAsync(message)
-    else
-        game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
-    end
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            local textChannel = TextChatService.TextChannels.RBXGeneral
+            textChannel:SendAsync(message)
+        else
+            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
+        end
+    end)
 end
 
 local function toggleTornado()
     ringPartsEnabled = not ringPartsEnabled
     if ringPartsEnabled then
         playSound("12221967")
-        local userId = Players:GetUserIdFromNameAsync("PulpoNot_Found")
-        local thumbType = Enum.ThumbnailType.HeadShot
-        local thumbSize = Enum.ThumbnailSize.Size420x420
-        local content, isReady = pcall(function() return Players:GetUserThumbnailAsync(userId, thumbType, thumbSize) end)
-        StarterGui:SetCore("SendNotification", {
-            Title = "Super ring parts V4",
-            Text = "enjoy",
-            Icon = isReady and content or nil,
-            Duration = 5
-        })
-        
+        pcall(function()
+            local userId = Players:GetUserIdFromNameAsync("PulpoNot_Found")
+            local thumbType = Enum.ThumbnailType.HeadShot
+            local thumbSize = Enum.ThumbnailSize.Size420x420
+            local content, isReady = pcall(function() return Players:GetUserThumbnailAsync(userId, thumbType, thumbSize) end)
+            StarterGui:SetCore("SendNotification", {
+                Title = "Super ring parts V4",
+                Text = "enjoy",
+                Icon = isReady and content or nil,
+                Duration = 5
+            })
+        end)
     else
         playSound("12221967")
     end
 end
--- ==============================================================================
--- [ FIN DEL CÓDIGO RING PORT]
--- ==============================================================================
 
+-- ==========================================
+-- [ HELPERS DE PERSONAJE ]
+-- ==========================================
 local function applySpeedAndJump()
-    local char = player.Character
-    if char and char:FindFirstChild("Humanoid") then
-        char.Humanoid.WalkSpeed = SavedConfig.WalkSpeed
-        char.Humanoid.JumpPower = SavedConfig.JumpPower
-        char.Humanoid.UseJumpPower = true
-    end
+    pcall(function()
+        local char = player.Character
+        if char and char:FindFirstChild("Humanoid") then
+            char.Humanoid.WalkSpeed = SavedConfig.WalkSpeed
+            char.Humanoid.JumpPower = SavedConfig.JumpPower
+            char.Humanoid.UseJumpPower = true
+        end
+    end)
 end
 
 local function toggleHeadlessFE(forceState)
@@ -675,36 +680,40 @@ local function toggleHeadlessFE(forceState)
     local head = char:FindFirstChild("Head")
     if not head then return end
     if SavedConfig.HeadlessActive then
-        if head:FindFirstChildOfClass("SpecialMesh") then
-            headlessCache.MeshScale = head:FindFirstChildOfClass("SpecialMesh").Scale
-            head:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
-        end
-        if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 1 end
-        for _, acc in pairs(char:GetChildren()) do
-            if acc:IsA("Accessory") then
-                local hnd = acc:FindFirstChild("Handle")
-                if hnd and hnd:FindFirstChildOfClass("SpecialMesh") then
-                    local att = hnd:FindFirstChildOfClass("Attachment")
-                    if att and (string.find(att.Name, "Hat") or string.find(att.Name, "Hair") or string.find(att.Name, "Face")) then
-                        headlessCache[acc.Name] = hnd:FindFirstChildOfClass("SpecialMesh").Scale
-                        hnd:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
+        pcall(function()
+            if head:FindFirstChildOfClass("SpecialMesh") then
+                headlessCache.MeshScale = head:FindFirstChildOfClass("SpecialMesh").Scale
+                head:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
+            end
+            if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 1 end
+            for _, acc in pairs(char:GetChildren()) do
+                if acc:IsA("Accessory") then
+                    local hnd = acc:FindFirstChild("Handle")
+                    if hnd and hnd:FindFirstChildOfClass("SpecialMesh") then
+                        local att = hnd:FindFirstChildOfClass("Attachment")
+                        if att and (string.find(att.Name, "Hat") or string.find(att.Name, "Hair") or string.find(att.Name, "Face")) then
+                            headlessCache[acc.Name] = hnd:FindFirstChildOfClass("SpecialMesh").Scale
+                            hnd:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
+                        end
                     end
                 end
             end
-        end
+        end)
     else
-        if head:FindFirstChildOfClass("SpecialMesh") and headlessCache.MeshScale then
-            head:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache.MeshScale
-        end
-        if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 0 end
-        for _, acc in pairs(char:GetChildren()) do
-            if acc:IsA("Accessory") then
-                local hnd = acc:FindFirstChild("Handle")
-                if hnd and hnd:FindFirstChildOfClass("SpecialMesh") and headlessCache[acc.Name] then
-                    hnd:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache[acc.Name]
+        pcall(function()
+            if head:FindFirstChildOfClass("SpecialMesh") and headlessCache.MeshScale then
+                head:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache.MeshScale
+            end
+            if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 0 end
+            for _, acc in pairs(char:GetChildren()) do
+                if acc:IsA("Accessory") then
+                    local hnd = acc:FindFirstChild("Handle")
+                    if hnd and hnd:FindFirstChildOfClass("SpecialMesh") and headlessCache[acc.Name] then
+                        hnd:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache[acc.Name]
+                    end
                 end
             end
-        end
+        end)
     end
 end
 
@@ -717,6 +726,7 @@ local function manageFlight(state)
     local hum = char:FindFirstChildOfClass("Humanoid")
     local root = char:FindFirstChild("HumanoidRootPart")
     if not hum or not root then return end
+
     if SavedConfig.FlyActive then
         hum.PlatformStand = true
         if bvFly then bvFly:Destroy() end
@@ -730,37 +740,40 @@ local function manageFlight(state)
 
         if connections.fly then connections.fly:Disconnect() end
         connections.fly = RunService.RenderStepped:Connect(function()
-            bgFly.CFrame = cam.CFrame
-            local finalDirection = Vector3.zero
-            if isMobile then
-                local inputDir = hum.MoveDirection
-                if inputDir.Magnitude > 0 then
-                    local camLook = cam.CFrame.LookVector
-                    local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
-                    if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
-                    local forwardFactor = inputDir:Dot(flatLook)
-                    finalDirection = Vector3.new(inputDir.X, camLook.Y * forwardFactor, inputDir.Z)
+            -- [FIX 8] pcall para que no crashee si bvFly/bgFly fueron destruidos por respawn
+            pcall(function()
+                bgFly.CFrame = cam.CFrame
+                local finalDirection = Vector3.zero
+                if isMobile then
+                    local inputDir = hum.MoveDirection
+                    if inputDir.Magnitude > 0 then
+                        local camLook = cam.CFrame.LookVector
+                        local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
+                        if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
+                        local forwardFactor = inputDir:Dot(flatLook)
+                        finalDirection = Vector3.new(inputDir.X, camLook.Y * forwardFactor, inputDir.Z)
+                    end
+                    if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+                else
+                    if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
+                    if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
+                    if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
+                    if UIS:IsKeyDown(Enum.KeyCode.D) then finalDirection = finalDirection + cam.CFrame.RightVector end
+                    if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+                    if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+                        finalDirection = finalDirection + Vector3.new(0, -1, 0)
+                    end
                 end
-                if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
-            else
-                if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
-                if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
-                if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
-                if UIS:IsKeyDown(Enum.KeyCode.D) then finalDirection = finalDirection + cam.CFrame.RightVector end
-                if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
-                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then 
-                    finalDirection = finalDirection + Vector3.new(0, -1, 0) 
+                if finalDirection.Magnitude > 0 then
+                    bvFly.Velocity = finalDirection.Unit * SavedConfig.FlySpeed
+                else
+                    bvFly.Velocity = Vector3.new(0, 0.05, 0)
                 end
-            end
-            if finalDirection.Magnitude > 0 then
-                bvFly.Velocity = finalDirection.Unit * SavedConfig.FlySpeed
-            else
-                bvFly.Velocity = Vector3.new(0, 0.05, 0) 
-            end
+            end)
         end)
     else
         if connections.fly then connections.fly:Disconnect() connections.fly = nil end
-        hum.PlatformStand = false
+        pcall(function() hum.PlatformStand = false end)
         if bvFly then bvFly:Destroy() bvFly = nil end
         if bgFly then bgFly:Destroy() bgFly = nil end
     end
@@ -773,28 +786,34 @@ local function manageESP(state)
         if not connections.esp then
             connections.esp = RunService.RenderStepped:Connect(function()
                 for _, p in pairs(Players:GetPlayers()) do
-                    if p ~= player and p.Character then
-                        if not p.Character:FindFirstChild("PULPI_ESP_V12") then
-                            local hl = Instance.new("Highlight", p.Character)
-                            hl.Name = "PULPI_ESP_V12"
-                            hl.FillTransparency = 1 
-                            hl.OutlineColor = Color3.new(1, 1, 1)
-                            hl.OutlineTransparency = 0
+                    pcall(function()
+                        if p ~= player and p.Character then
+                            if not p.Character:FindFirstChild("PULPI_ESP_V12") then
+                                local hl = Instance.new("Highlight", p.Character)
+                                hl.Name = "PULPI_ESP_V12"
+                                hl.FillTransparency = 1
+                                hl.OutlineColor = Color3.new(1, 1, 1)
+                                hl.OutlineTransparency = 0
+                            end
                         end
-                    end
+                    end)
                 end
             end)
         end
     else
         if connections.esp then connections.esp:Disconnect() connections.esp = nil end
         for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then p.Character.PULPI_ESP_V12:Destroy() end
+            pcall(function()
+                if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then
+                    p.Character.PULPI_ESP_V12:Destroy()
+                end
+            end)
         end
     end
 end
 
 -- ==========================================
--- [ SECCIÓN 6: SISTEMA TOXIC HUNTER (LISTA DINÁMICA & ANTI-FALL) ]
+-- [ TOXIC HUNTER ]
 -- ==========================================
 local huntTarget = nil
 local huntHighlight = nil
@@ -806,56 +825,64 @@ local function stopHunt()
     hunting = false
     if connections.hunt then connections.hunt:Disconnect() connections.hunt = nil end
     if connections.huntNoclip then connections.huntNoclip:Disconnect() connections.huntNoclip = nil end
-    
+
     if huntHighlight then huntHighlight:Destroy() huntHighlight = nil end
     if huntBeam then huntBeam:Destroy() huntBeam = nil end
     if att0 then att0:Destroy() att0 = nil end
     if att1 then att1:Destroy() att1 = nil end
-    
-    local char = player.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        local hrp = char.HumanoidRootPart
-        local bv = hrp:FindFirstChild("HUNT_BV")
-        local bav = hrp:FindFirstChild("HUNT_BAV")
-        if bv then bv:Destroy() end
-        if bav then bav:Destroy() end
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-    end
+
+    -- [FIX 10] Envuelto en pcall: si el personaje respawneó, hrp puede no existir y crasheaba
+    pcall(function()
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local hrp = char.HumanoidRootPart
+            local bv = hrp:FindFirstChild("HUNT_BV")
+            local bav = hrp:FindFirstChild("HUNT_BAV")
+            if bv then bv:Destroy() end
+            if bav then bav:Destroy() end
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
     huntTarget = nil
 end
 
 local function startHunt(targetPlayer)
     stopHunt()
     huntTarget = targetPlayer
-    
+
     if not huntTarget then return end
-    
+
     hunting = true
-    StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Cazando a: " .. huntTarget.Name, Duration=3})
-    
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="TP Fling a: " .. huntTarget.Name, Duration=3})
+    end)
+
     local char = player.Character or player.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart")
-    
-    -- BodyVelocity principal para sostenernos si el enemigo muere
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    if not hrp then stopHunt() return end
+
+    local oldCFrame = hrp.CFrame
+
     local bv = Instance.new("BodyVelocity", hrp)
     bv.Name = "HUNT_BV"
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Velocity = Vector3.zero -- Por defecto te mantiene flotando en el sitio
-    
+    bv.Velocity = Vector3.zero
+
     local bav = Instance.new("BodyAngularVelocity", hrp)
     bav.Name = "HUNT_BAV"
     bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bav.AngularVelocity = Vector3.new(0, 999999, 0)
-    
-    -- Noclip Constante
+    bav.AngularVelocity = Vector3.new(0, 999999999, 0)
+
     connections.huntNoclip = RunService.Stepped:Connect(function()
-        for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = false end
-        end
+        if not hunting then return end
+        pcall(function()
+            for _, v in pairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then v.CanCollide = false end
+            end
+        end)
     end)
-    
-    -- TRACER ROJO (Láser Visual)
+
     att0 = Instance.new("Attachment", hrp)
     huntBeam = Instance.new("Beam", hrp)
     huntBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
@@ -864,61 +891,72 @@ local function startHunt(targetPlayer)
     huntBeam.Width1 = 0.5
     huntBeam.Transparency = NumberSequence.new(0.3)
     huntBeam.Attachment0 = att0
-    
-    -- Loop de Caza Seguro
+
+    pcall(function()
+        hrp.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0))
+    end)
+    task.wait(0.1)
+
     connections.hunt = RunService.Heartbeat:Connect(function()
         if not hunting then return end
-        if not huntTarget or not huntTarget.Parent then stopHunt() return end
-        
-        local tChar = huntTarget.Character
-        local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
-        local tHum = tChar and tChar:FindFirstChild("Humanoid")
-        
-        if tHrp and tHum and tHum.Health > 0 then
-            -- Mantiene el ESP Rojo en la víctima
-            if not tChar:FindFirstChild("HUNT_ESP") then
-                huntHighlight = Instance.new("Highlight", tChar)
-                huntHighlight.Name = "HUNT_ESP"
-                huntHighlight.FillColor = Color3.fromRGB(255, 0, 0)
-                huntHighlight.FillTransparency = 0.5
-                huntHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-            end
-            
-            -- Actualiza la conexión del láser
-            if not att1 or att1.Parent ~= tHrp then
-                if att1 then att1:Destroy() end
-                att1 = Instance.new("Attachment", tHrp)
-                huntBeam.Attachment1 = att1
-            end
-            
-            -- Aplicamos fuerza y TP
-            bav.AngularVelocity = Vector3.new(0, 999999, 0)
-            hrp.CFrame = tHrp.CFrame
-        else
-            -- LA VÍCTIMA MURIÓ: NOS MANTENEMOS FLOTANDO ARRIBA SEGUROS
-            bav.AngularVelocity = Vector3.zero
-            hrp.CFrame = CFrame.new(0, 1500, 0)
-            if att1 then att1:Destroy() att1 = nil end
-            if huntHighlight then huntHighlight:Destroy() huntHighlight = nil end
+        if not huntTarget or not huntTarget.Parent then
+            stopHunt()
+            pcall(function() hrp.CFrame = oldCFrame end)
+            return
         end
+
+        pcall(function()
+            local tChar = huntTarget.Character
+            local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
+            local tHum = tChar and tChar:FindFirstChild("Humanoid")
+
+            if tHrp and tHum and tHum.Health > 0 then
+                if not tChar:FindFirstChild("HUNT_ESP") then
+                    huntHighlight = Instance.new("Highlight", tChar)
+                    huntHighlight.Name = "HUNT_ESP"
+                    huntHighlight.FillColor = Color3.fromRGB(255, 0, 0)
+                    huntHighlight.FillTransparency = 0.5
+                    huntHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                end
+
+                if not att1 or att1.Parent ~= tHrp then
+                    if att1 then att1:Destroy() end
+                    att1 = Instance.new("Attachment", tHrp)
+                    huntBeam.Attachment1 = att1
+                end
+
+                bav.AngularVelocity = Vector3.new(0, 999999999, 0)
+                hrp.CFrame = tHrp.CFrame
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            else
+                stopHunt()
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                    hrp.CFrame = oldCFrame
+                end)
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Víctima Eliminada.", Duration=3})
+                end)
+            end
+        end)
     end)
 end
 
--- ==============================================================================
--- [ SECCIÓN 7: CONSTRUCCIÓN COMPLETA DE GUI Y ORQUESTACIÓN ]
--- ==============================================================================
+-- ==========================================
+-- [ CONSTRUCCIÓN DE GUI Y ORQUESTACIÓN ]
+-- ==========================================
 local function buildAndOrchestrate()
-    -- MAIN GUI
     local mainLayer = Instance.new("ScreenGui", targetParent)
     mainLayer.Name = "PULPI_GUI_V12"
-    mainLayer.IgnoreGuiInset = true 
+    mainLayer.IgnoreGuiInset = true
 
     local menuBase = Instance.new(UIConfig.Type, mainLayer)
     menuBase.Size = UIConfig.MainSize
     menuBase.Position = UDim2.fromScale(0.5, 0.5)
-    menuBase.AnchorPoint = Vector2.new(0.5, 0.5) 
+    menuBase.AnchorPoint = Vector2.new(0.5, 0.5)
     menuBase.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-    menuBase.Visible = false 
+    menuBase.Visible = false
     menuBase.Active = true
 
     if isMobile then
@@ -933,17 +971,16 @@ local function buildAndOrchestrate()
     local menuStroke = Instance.new("UIStroke", menuBase)
     menuStroke.Thickness = 2
     menuStroke.Color = Color3.fromRGB(150, 180, 255)
-    
+
     local scroll = Instance.new("ScrollingFrame", menuBase)
     scroll.Size = UDim2.fromScale(1, 0.9)
     scroll.Position = UDim2.fromScale(0, 0.1)
-    scroll.BackgroundTransparency = 1 
+    scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
     scroll.ScrollBarThickness = UIConfig.ScrollThick
     scroll.ScrollingDirection = Enum.ScrollingDirection.Y
-    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y 
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-    -- SISTEMA DE MINIMIZAR MENÚ PRINCIPAL
     local titleHeader = Instance.new("TextLabel", menuBase)
     titleHeader.Size = UDim2.fromScale(1, 0.1)
     titleHeader.BackgroundTransparency = 1
@@ -951,7 +988,7 @@ local function buildAndOrchestrate()
     titleHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
     titleHeader.TextScaled = true
     titleHeader.Font = Enum.Font.GothamBlack
-    
+
     applyMinimizeSystem(menuBase, UIConfig.MainSize, UIConfig.MinSize, scroll)
 
     local zoomScale = Instance.new("UIScale", menuBase)
@@ -964,7 +1001,7 @@ local function buildAndOrchestrate()
 
     local bgBlur = Instance.new("BlurEffect", Lighting)
     bgBlur.Name = "PULPI_BLUR"
-    bgBlur.Size = 0 
+    bgBlur.Size = 0
 
     local function handleMenuToggle()
         menuOpen = not menuOpen
@@ -996,20 +1033,20 @@ local function buildAndOrchestrate()
     -- ==========================================
     local tkGui = Instance.new("ScreenGui", targetParent)
     tkGui.Name = "TK_GUI_V12"
-    tkGui.IgnoreGuiInset = true 
+    tkGui.IgnoreGuiInset = true
     tkGui.Enabled = true
 
     local tkPanel = Instance.new("Frame", tkGui)
     tkPanel.Size = UIConfig.TkSize
-    tkPanel.Position = isMobile and UDim2.fromScale(0.3, 0.85) or UDim2.fromScale(0.3, 0.85)
+    tkPanel.Position = UDim2.fromScale(0.3, 0.85)
     tkPanel.AnchorPoint = Vector2.new(0.5, 1)
     tkPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     tkPanel.BackgroundTransparency = 0.15
-    tkPanel.Visible = false 
+    tkPanel.Visible = false
     tkPanel.Active = true
 
     makeDraggable(tkPanel)
-    Instance.new("UICorner", tkPanel).CornerRadius = UDim.new(0,16)
+    Instance.new("UICorner", tkPanel).CornerRadius = UDim.new(0, 16)
     Instance.new("UIStroke", tkPanel).Color = Color3.new(1, 1, 1)
 
     local tkContent = Instance.new("Frame", tkPanel)
@@ -1028,7 +1065,7 @@ local function buildAndOrchestrate()
     tkTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
     tkTitle.TextScaled = true
     tkTitle.Font = Enum.Font.GothamBold
-    
+
     applyMinimizeSystem(tkPanel, UIConfig.TkSize, UIConfig.TkMinSize, tkContent)
 
     local crosshair = Instance.new("Frame", tkGui)
@@ -1043,6 +1080,7 @@ local function buildAndOrchestrate()
     ignoreFolder.Name = "PULPI_IGNORE_FOLDER"
 
     local tkGhost, manualGrabbedTarget
+
     local function getAimPart()
         local cx = crosshair.AbsolutePosition.X + (crosshair.AbsoluteSize.X / 2)
         local cy = crosshair.AbsolutePosition.Y + (crosshair.AbsoluteSize.Y / 2)
@@ -1051,7 +1089,16 @@ local function buildAndOrchestrate()
         params.FilterDescendantsInstances = {player.Character, cam, ignoreFolder}
         params.FilterType = Enum.RaycastFilterType.Blacklist
         local hit = Workspace:Raycast(ray.Origin, ray.Direction * 800, params)
-        return hit and hit.Instance
+
+        if hit and hit.Instance then
+            local inst = hit.Instance
+            local model = inst:FindFirstAncestorOfClass("Model")
+            if model and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
+                return model.HumanoidRootPart
+            end
+            return inst
+        end
+        return nil
     end
 
     local function releaseTK()
@@ -1076,7 +1123,9 @@ local function buildAndOrchestrate()
         tkGhost.Parent = ignoreFolder
         crosshair.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
         connections.tk = RunService.RenderStepped:Connect(function()
-            if tkGhost then tkGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * 15) end
+            pcall(function()
+                if tkGhost then tkGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * 15) end
+            end)
         end)
     end
 
@@ -1088,53 +1137,69 @@ local function buildAndOrchestrate()
         local char = player.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
         if not root then return end
+
         local oldCFrame = root.CFrame
         local forceV = Instance.new("BodyVelocity", root)
         forceV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         forceV.Velocity = Vector3.zero
+
         local forceA = Instance.new("BodyAngularVelocity", root)
         forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        forceA.AngularVelocity = Vector3.new(0, 999999999, 0)
+        -- [FIX 4] CalculateTensorForce ahora retorna un escalar (número).
+        -- Se aplica solo en eje Y para rotación efectiva de fling FE, no caótica en los 3 ejes.
+        local tensorForce = MathCore.CalculateTensorForce(100)
+        forceA.AngularVelocity = Vector3.new(0, tensorForce, 0)
+
         local noclipping = RunService.Stepped:Connect(function()
-            for _, v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end
+            pcall(function()
+                for _, v in pairs(char:GetDescendants()) do
+                    if v:IsA("BasePart") then v.CanCollide = false end
+                end
+            end)
         end)
-        
-        root.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0))
-        task.wait(0.1) 
-        
+
+        pcall(function()
+            root.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0))
+        end)
+        task.wait(0.1)
+
         local tStart = tick()
         local loopFling
         loopFling = RunService.Heartbeat:Connect(function()
-            if tick() - tStart > 0.8 or not target.Parent then
-                loopFling:Disconnect() noclipping:Disconnect()
-                forceV:Destroy() forceA:Destroy()
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = oldCFrame
+            if tick() - tStart > 1 or not target.Parent then
+                loopFling:Disconnect()
+                noclipping:Disconnect()
+                pcall(function()
+                    forceV:Destroy()
+                    forceA:Destroy()
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = oldCFrame
+                end)
                 return
             end
-            root.CFrame = target.CFrame * CFrame.new(0, 0, 0)
+            pcall(function() root.CFrame = target.CFrame end)
         end)
     end
 
     -- ==========================================
-    -- HUNT GUI (LISTA DE JUGADORES INTERACTIVA)
+    -- HUNT GUI
     -- ==========================================
     local huntGui = Instance.new("ScreenGui", targetParent)
     huntGui.Name = "HUNT_GUI_V12"
-    huntGui.IgnoreGuiInset = true 
+    huntGui.IgnoreGuiInset = true
 
     local huntPanel = Instance.new("Frame", huntGui)
     huntPanel.Size = UIConfig.HuntSize
-    huntPanel.Position = isMobile and UDim2.fromScale(0.7, 0.85) or UDim2.fromScale(0.7, 0.85)
+    huntPanel.Position = UDim2.fromScale(0.7, 0.85)
     huntPanel.AnchorPoint = Vector2.new(0.5, 1)
     huntPanel.BackgroundColor3 = Color3.fromRGB(20, 10, 10)
     huntPanel.BackgroundTransparency = 0.15
-    huntPanel.Visible = false 
+    huntPanel.Visible = false
     huntPanel.Active = true
 
     makeDraggable(huntPanel)
-    Instance.new("UICorner", huntPanel).CornerRadius = UDim.new(0,16)
+    Instance.new("UICorner", huntPanel).CornerRadius = UDim.new(0, 16)
     Instance.new("UIStroke", huntPanel).Color = Color3.fromRGB(255, 50, 50)
 
     local huntContent = Instance.new("Frame", huntPanel)
@@ -1149,10 +1214,9 @@ local function buildAndOrchestrate()
     huntTitle.TextColor3 = Color3.fromRGB(255, 100, 100)
     huntTitle.TextScaled = true
     huntTitle.Font = Enum.Font.GothamBold
-    
+
     applyMinimizeSystem(huntPanel, UIConfig.HuntSize, UIConfig.TkMinSize, huntContent)
 
-    -- Botón de refrescar lista
     local btnRefresh = Instance.new("TextButton", huntContent)
     btnRefresh.Size = UDim2.fromScale(0.9, 0.15)
     btnRefresh.Position = UDim2.fromScale(0.05, 0)
@@ -1161,9 +1225,8 @@ local function buildAndOrchestrate()
     btnRefresh.TextColor3 = Color3.new(1,1,1)
     btnRefresh.Font = Enum.Font.GothamBold
     btnRefresh.TextScaled = true
-    Instance.new("UICorner", btnRefresh).CornerRadius = UDim.new(0,8)
+    Instance.new("UICorner", btnRefresh).CornerRadius = UDim.new(0, 8)
 
-    -- Scroll de Jugadores
     local playerScroll = Instance.new("ScrollingFrame", huntContent)
     playerScroll.Size = UDim2.fromScale(0.9, 0.55)
     playerScroll.Position = UDim2.fromScale(0.05, 0.2)
@@ -1171,7 +1234,7 @@ local function buildAndOrchestrate()
     playerScroll.BorderSizePixel = 0
     playerScroll.ScrollBarThickness = 4
     playerScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    Instance.new("UICorner", playerScroll).CornerRadius = UDim.new(0,8)
+    Instance.new("UICorner", playerScroll).CornerRadius = UDim.new(0, 8)
 
     local pLayout = Instance.new("UIListLayout", playerScroll)
     pLayout.Padding = UDim.new(0, 5)
@@ -1208,32 +1271,34 @@ local function buildAndOrchestrate()
     btnStopHunt.TextColor3 = Color3.new(1,1,1)
     btnStopHunt.Font = Enum.Font.GothamBold
     btnStopHunt.TextScaled = true
-    Instance.new("UICorner", btnStopHunt).CornerRadius = UDim.new(0,8)
+    Instance.new("UICorner", btnStopHunt).CornerRadius = UDim.new(0, 8)
 
     btnStopHunt.MouseButton1Click:Connect(function()
         stopHunt()
-        StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Caza Detenida.", Duration=2})
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Caza Detenida.", Duration=2})
+        end)
     end)
 
     -- ==========================================
-    -- ANNOUNCE GUI (NUEVO SISTEMA VIP)
+    -- ANNOUNCE GUI (SOLO PARA PulpoNot_Found)
     -- ==========================================
     if player.Name == "PulpoNot_Found" then
         local announceGui = Instance.new("ScreenGui", targetParent)
         announceGui.Name = "ANNOUNCE_GUI_V13"
-        announceGui.IgnoreGuiInset = true 
+        announceGui.IgnoreGuiInset = true
 
         local announcePanel = Instance.new("Frame", announceGui)
         announcePanel.Size = UIConfig.AnnounceSize
-        announcePanel.Position = isMobile and UDim2.fromScale(0.1, 0.5) or UDim2.fromScale(0.1, 0.5)
+        announcePanel.Position = UDim2.fromScale(0.1, 0.5)
         announcePanel.AnchorPoint = Vector2.new(0, 0.5)
         announcePanel.BackgroundColor3 = Color3.fromRGB(20, 25, 20)
         announcePanel.BackgroundTransparency = 0.15
-        announcePanel.Visible = false 
+        announcePanel.Visible = false
         announcePanel.Active = true
 
         makeDraggable(announcePanel)
-        Instance.new("UICorner", announcePanel).CornerRadius = UDim.new(0,16)
+        Instance.new("UICorner", announcePanel).CornerRadius = UDim.new(0, 16)
         Instance.new("UIStroke", announcePanel).Color = Color3.fromRGB(150, 255, 150)
 
         local announceContent = Instance.new("Frame", announcePanel)
@@ -1248,10 +1313,9 @@ local function buildAndOrchestrate()
         announceTitle.TextColor3 = Color3.fromRGB(150, 255, 150)
         announceTitle.TextScaled = true
         announceTitle.Font = Enum.Font.GothamBold
-        
+
         applyMinimizeSystem(announcePanel, UIConfig.AnnounceSize, UIConfig.TkMinSize, announceContent)
 
-        -- Elementos internos del Anunciador
         local passBox = Instance.new("TextBox", announceContent)
         passBox.Size = UDim2.fromScale(0.8, 0.3)
         passBox.Position = UDim2.fromScale(0.1, 0.35)
@@ -1262,7 +1326,7 @@ local function buildAndOrchestrate()
         passBox.PlaceholderText = "Ingrese PIN..."
         passBox.Text = ""
         passBox.ClearTextOnFocus = true
-        Instance.new("UICorner", passBox).CornerRadius = UDim.new(0,8)
+        Instance.new("UICorner", passBox).CornerRadius = UDim.new(0, 8)
 
         local msgBox = Instance.new("TextBox", announceContent)
         msgBox.Size = UDim2.fromScale(0.9, 0.5)
@@ -1277,7 +1341,7 @@ local function buildAndOrchestrate()
         msgBox.Visible = false
         msgBox.TextYAlignment = Enum.TextYAlignment.Top
         msgBox.TextXAlignment = Enum.TextXAlignment.Left
-        Instance.new("UICorner", msgBox).CornerRadius = UDim.new(0,8)
+        Instance.new("UICorner", msgBox).CornerRadius = UDim.new(0, 8)
 
         local btnSendAnnounce = Instance.new("TextButton", announceContent)
         btnSendAnnounce.Size = UDim2.fromScale(0.9, 0.3)
@@ -1288,7 +1352,7 @@ local function buildAndOrchestrate()
         btnSendAnnounce.Font = Enum.Font.GothamBold
         btnSendAnnounce.TextScaled = true
         btnSendAnnounce.Visible = false
-        Instance.new("UICorner", btnSendAnnounce).CornerRadius = UDim.new(0,8)
+        Instance.new("UICorner", btnSendAnnounce).CornerRadius = UDim.new(0, 8)
 
         passBox.FocusLost:Connect(function(enterPressed)
             if enterPressed then
@@ -1296,7 +1360,9 @@ local function buildAndOrchestrate()
                     passBox.Visible = false
                     msgBox.Visible = true
                     btnSendAnnounce.Visible = true
-                    StarterGui:SetCore("SendNotification", {Title="ACCESO VIP", Text="Bienvenido Creador.", Duration=2})
+                    pcall(function()
+                        StarterGui:SetCore("SendNotification", {Title="ACCESO VIP", Text="Bienvenido Creador.", Duration=2})
+                    end)
                 else
                     passBox.Text = ""
                     passBox.PlaceholderText = "Contraseña Incorrecta"
@@ -1307,12 +1373,13 @@ local function buildAndOrchestrate()
         btnSendAnnounce.MouseButton1Click:Connect(function()
             if msgBox.Text ~= "" then
                 enviarAnuncioDiscord(msgBox.Text)
-                StarterGui:SetCore("SendNotification", {Title="ANUNCIO ENVIADO", Text="El mensaje fue enviado a Discord.", Duration=2})
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {Title="ANUNCIO ENVIADO", Text="El mensaje fue enviado a Discord.", Duration=2})
+                end)
                 msgBox.Text = ""
             end
         end)
 
-        -- Botón en el menú principal para abrir este panel
         local annBtn = Instance.new("TextButton", scroll)
         annBtn.Size = UIConfig.BtnSize
         annBtn.BackgroundColor3 = Color3.fromRGB(20, 80, 20)
@@ -1321,7 +1388,7 @@ local function buildAndOrchestrate()
         annBtn.TextScaled = true
         annBtn.Font = Enum.Font.GothamBold
         Instance.new("UICorner", annBtn).CornerRadius = UDim.new(0, 10)
-        
+
         annBtn.MouseButton1Click:Connect(function()
             announcePanelActive = not announcePanelActive
             announcePanel.Visible = announcePanelActive
@@ -1329,7 +1396,7 @@ local function buildAndOrchestrate()
     end
 
     -- ==========================================
-    -- CONSTRUCTORES UI PRINCIPAL (CON SLIDER MANUAL Y TEXTBOX)
+    -- CONSTRUCTORES UI PRINCIPAL
     -- ==========================================
     local function spawnButton(parentUI, name, callback)
         local btn = Instance.new("TextButton", parentUI)
@@ -1344,34 +1411,32 @@ local function buildAndOrchestrate()
         return btn
     end
 
-    local function spawnSlider(configKey, min, max, callback)
-        local name = T(configKey)
+    local function spawnSlider(configKey, labelName, min, max, callback)
         local start = SavedConfig[configKey]
-        
+
         local container = Instance.new("Frame", scroll)
         container.Size = UIConfig.SliderContSize
         container.BackgroundTransparency = 1
-        
-        -- AHORA ES UN TEXTBOX PARA PODER ESCRIBIR
+
         local label = Instance.new("TextBox", container)
         label.Size = UDim2.fromScale(1, 0.45)
         label.BackgroundTransparency = 1
         label.TextColor3 = Color3.new(1,1,1)
         label.TextScaled = true
         label.Font = Enum.Font.Gotham
-        label.Text = name .. ": " .. start
-        label.ClearTextOnFocus = true -- Se borra al tocar para facilitar escribir
-        
+        label.Text = labelName .. ": " .. start
+        label.ClearTextOnFocus = true
+
         local track = Instance.new("Frame", container)
         track.Size = UIConfig.SliderTrackSize
         track.Position = UDim2.fromScale(0, 0.55)
-        track.BackgroundColor3 = Color3.fromRGB(40,40,60)
-        Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
-        
+        track.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
         local fill = Instance.new("Frame", track)
         fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
-        fill.Size = UDim2.fromScale((start - min)/(max - min), 1)
-        Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+        fill.Size = UDim2.fromScale((start - min) / (max - min), 1)
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
 
         local dragging = false
         local function processInput(inputObj)
@@ -1379,15 +1444,16 @@ local function buildAndOrchestrate()
             local clampedX = math.clamp(rawX, 0, 1)
             fill.Size = UDim2.fromScale(clampedX, 1)
             local finalVal = math.floor(min + (max - min) * clampedX)
-            label.Text = name .. ": " .. finalVal
+            label.Text = labelName .. ": " .. finalVal
             SavedConfig[configKey] = finalVal
             callback(finalVal)
             SaveData()
         end
 
         track.InputBegan:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
-                dragging = true processInput(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                processInput(i)
             end
         end)
         UIS.InputChanged:Connect(function(i)
@@ -1396,75 +1462,87 @@ local function buildAndOrchestrate()
             end
         end)
         UIS.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then 
-                dragging = false 
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
             end
         end)
-        
-        -- Lógica al terminar de escribir en el TextBox
+
         label.FocusLost:Connect(function()
-            local matchNum = label.Text:match("%d+") -- Extrae solo números
+            local matchNum = label.Text:match("%d+")
             local num = tonumber(matchNum)
-            
             if num then
                 local finalVal = math.floor(math.clamp(num, min, max))
-                label.Text = name .. ": " .. finalVal
-                fill.Size = UDim2.fromScale((finalVal - min)/(max - min), 1)
+                label.Text = labelName .. ": " .. finalVal
+                fill.Size = UDim2.fromScale((finalVal - min) / (max - min), 1)
                 SavedConfig[configKey] = finalVal
                 callback(finalVal)
                 SaveData()
             else
-                -- Si no puso un número válido, restaura el texto
-                label.Text = name .. ": " .. SavedConfig[configKey]
+                label.Text = labelName .. ": " .. SavedConfig[configKey]
             end
         end)
     end
 
     -- ==========================================
-    -- INSERCIÓN DE ELEMENTOS EN EL MENÚ
+    -- INSERCIÓN DE ELEMENTOS
     -- ==========================================
     task.spawn(function()
         task.wait(0.1)
-        
-        spawnSlider("WalkSpeed", 16, 400, function(v) pcall(function() player.Character.Humanoid.WalkSpeed = v end) end)
-        spawnSlider("JumpPower", 50, 500, function(v) pcall(function() player.Character.Humanoid.JumpPower = v end) end)
-        spawnSlider("FlySpeed", 30, 800, function(v) flySpeed = v end)
-        spawnSlider("RingRadius", 5, 1000, function(v) SavedConfig.RingRadius = v end) -- Vinculado a la variable
-        
+
+        -- [FIX 5] spawnSlider ahora recibe el nombre como parámetro explícito en vez de T(configKey)
+        -- (T("WalkSpeed") = "VELOCIDAD", etc. — funciona correctamente así)
+        spawnSlider("WalkSpeed", T("Speed"), 16, 400, function(v)
+            pcall(function() player.Character.Humanoid.WalkSpeed = v end)
+        end)
+        spawnSlider("JumpPower", T("Jump"), 50, 500, function(v)
+            pcall(function() player.Character.Humanoid.JumpPower = v end)
+        end)
+        -- [FIX 5] "flySpeed = v" (variable global no definida) → SavedConfig.FlySpeed = v
+        spawnSlider("FlySpeed", T("FlySpeed"), 30, 800, function(v)
+            SavedConfig.FlySpeed = v
+        end)
+        spawnSlider("RingRadius", T("Radius"), 5, 1000, function(v)
+            SavedConfig.RingRadius = v
+        end)
+
         spawnButton(scroll, T("Headless"), function() toggleHeadlessFE() end)
         spawnButton(scroll, T("FlyBtn"), function() manageFlight() end)
         spawnButton(scroll, T("EspBtn"), function() manageESP() end)
-        spawnButton(scroll, T("TornadoBtn"), toggleTornado) -- ÉSTE AHORA ACTIVA EL SUPER RING V4
-        
+        spawnButton(scroll, T("TornadoBtn"), toggleTornado)
+
         spawnButton(scroll, T("FlingMenuBtn"), function()
             tkPanelActive = not tkPanelActive
             tkPanel.Visible = tkPanelActive
             crosshair.Visible = tkPanelActive
             if not tkPanelActive then releaseTK() end
         end)
-        
+
         local huntBtn = spawnButton(scroll, T("HuntMenuBtn"), function()
             huntPanelActive = not huntPanelActive
             huntPanel.Visible = huntPanelActive
             if huntPanelActive then populatePlayers() end
         end)
         huntBtn.BackgroundColor3 = Color3.fromRGB(80, 20, 20)
-        
+
         spawnButton(scroll, "MM2 (SnapSanix)", function()
-            loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
+            pcall(function()
+                loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
+            end)
         end)
-        
-        -- Botones del panel TK Manual
+
+        -- Botones panel TK
         local btnG = spawnButton(tkContent, T("GrabBtn"), grabTK)
-        btnG.BackgroundColor3 = Color3.fromRGB(60,60,60)
+        btnG.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
         local btnS = spawnButton(tkContent, T("DropBtn"), releaseTK)
-        btnS.BackgroundColor3 = Color3.fromRGB(40,40,70)
+        btnS.BackgroundColor3 = Color3.fromRGB(40, 40, 70)
         local btnF = spawnButton(tkContent, T("FlingShoot"), manualFling)
-        btnF.BackgroundColor3 = Color3.fromRGB(180,40,40)
-        btnF.TextColor3 = Color3.new(0,0,0)
+        btnF.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        btnF.TextColor3 = Color3.new(0, 0, 0)
     end)
 
-    -- Activadores Globales
+    -- ==========================================
+    -- ACTIVADORES GLOBALES
+    -- ==========================================
     if isMobile then
         local mControls = Instance.new("ScreenGui", targetParent)
         mControls.Name = "MOBILE_CONTROLS"
@@ -1475,11 +1553,12 @@ local function buildAndOrchestrate()
         btn.Text = "🐙"
         btn.TextScaled = true
         Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
-        makeDraggable(btn)
+        -- [FIX 9] makeDraggable REMOVIDO del btn móvil: interfería con MouseButton1Click
+        -- En móvil el arrastre en el mismo botón bloqueaba el tap/click, el menú no abría
         btn.MouseButton1Click:Connect(handleMenuToggle)
     else
-        UIS.InputBegan:Connect(function(i, g) 
-            if not g and i.KeyCode == Enum.KeyCode.H then handleMenuToggle() end 
+        UIS.InputBegan:Connect(function(i, g)
+            if not g and i.KeyCode == Enum.KeyCode.H then handleMenuToggle() end
         end)
         UIS.InputBegan:Connect(function(i, g)
             if not tkPanelActive then return end
@@ -1504,18 +1583,18 @@ local function buildAndOrchestrate()
     if SavedConfig.HeadlessActive then toggleHeadlessFE(true) end
     if SavedConfig.ESPActive then manageESP(true) end
 
-    handleMenuToggle() 
+    handleMenuToggle()
 end
 
 -- ==========================================
--- [ SECCIÓN 8: ORQUESTADOR DE INICIO ]
+-- [ ORQUESTADOR DE INICIO ]
 -- ==========================================
 if not isfile(ConfigPath) then
     showLangSelector(function()
         runIntro(buildAndOrchestrate)
     end)
 else
-    currentLang = SavedConfig.Lang
+    -- [FIX 6] "currentLang = SavedConfig.Lang" eliminado: variable nunca definida ni usada en ningún lado
     runIntro(buildAndOrchestrate)
 end
 
