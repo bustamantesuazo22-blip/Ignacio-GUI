@@ -323,6 +323,62 @@ pcall(function()
     end
 end)
 
+-- ==========================================
+-- [ MAPA SIEMPRE SOLIDO - SISTEMA EVENTO v8 ]
+-- Sin lag: usa DescendantAdded para detectar partes nuevas al instante.
+-- No itera el workspace entero. Solo procesa 1 parte a la vez cuando aparece.
+-- ==========================================
+local mapKw = {"floor","wall","roof","base","ground","platform","stair","step","block","union","tile","plank","brick","road","building","struct","solid","mesh","part","ramp","island","spawn","terrain","land","water","bridge","rail","fence","pillar","column","ceil","ceiling","edge","border"}
+
+local function isPlayerCharacterPart(part)
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character and part:IsDescendantOf(p.Character) then
+            return true
+        end
+    end
+    return false
+end
+
+local function solidifyPart(part)
+    -- Solo BaseParts, no personajes, procesado instantaneo sin iterar nada
+    if not part:IsA("BasePart") then return end
+    if not part.Parent then return end
+    if isPlayerCharacterPart(part) then return end
+    -- Aplicar CanCollide=true siempre en partes del mundo
+    part.CanCollide = true
+    -- Anchored solo si el nombre coincide con keyword de mapa
+    if part.Anchored then return end -- ya esta anchored, nada que hacer
+    local n = string.lower(part.Name)
+    for _, kw in pairs(mapKw) do
+        if string.find(n, kw, 1, true) then
+            part.Anchored = true
+            return
+        end
+    end
+end
+
+-- Conectar evento: cada vez que aparece una parte nueva se procesa inmediatamente
+-- 0 iteraciones en masa, 0 lag
+Workspace.DescendantAdded:Connect(function(obj)
+    -- task.defer para no bloquear el hilo principal del juego
+    task.defer(function()
+        pcall(solidifyPart, obj)
+    end)
+end)
+
+-- Pasada inicial unica al cargar el script: procesada en lotes pequenos
+-- para no congelar en mapas con muchas partes ya existentes
+task.spawn(function()
+    local all = Workspace:GetDescendants()
+    local batch = 50 -- procesar de a 50 partes por frame, sin lag visible
+    for i = 1, #all, batch do
+        for j = i, math.min(i + batch - 1, #all) do
+            pcall(solidifyPart, all[j])
+        end
+        task.wait() -- ceder un frame entre cada lote
+    end
+end)
+
 local targetParent = (pcall(function() return CoreGui.Name end)) and CoreGui or player.PlayerGui
 
 -- ==========================================
@@ -508,6 +564,14 @@ if not getgenv().Network then
     -- Sin getgenv() dentro del bloque if, "Network" no existe como variable local/global accesible
     getgenv().Network.RetainPart = function(Part)
         if typeof(Part) == "Instance" and Part:IsA("BasePart") and Part:IsDescendantOf(Workspace) then
+            -- [FIX v3 NATURAL DISASTER] No poner CanCollide=false en partes del mapa/estructuras
+            -- Las estructuras del mapa son Anchored=true, excluirlas completamente
+            if Part.Anchored then return end
+            -- No afectar el personaje local
+            if Part:IsDescendantOf(LocalPlayer.Character or Instance.new("Folder")) then return end
+            -- No afectar personajes de otros jugadores
+            local parentModel = Part:FindFirstAncestorOfClass("Model")
+            if parentModel and parentModel:FindFirstChildOfClass("Humanoid") then return end
             table.insert(getgenv().Network.BaseParts, Part)
             Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
             Part.CanCollide = false
@@ -565,9 +629,21 @@ local function ForcePart(v)
 end
 
 local function RetainPart(Part)
+    -- [FIX v3 NATURAL DISASTER] Filtros para NO afectar el mapa del juego
     if Part:IsA("BasePart") and not Part.Anchored and Part:IsDescendantOf(Workspace) then
+        -- No afectar el personaje local
         if Part.Parent == LocalPlayer.Character or Part:IsDescendantOf(LocalPlayer.Character) then
             return false
+        end
+        -- No afectar personajes de otros jugadores (tienen Humanoid)
+        local parentModel = Part:FindFirstAncestorOfClass("Model")
+        if parentModel and parentModel:FindFirstChildOfClass("Humanoid") then
+            return false
+        end
+        -- No afectar partes con nombre de mapa típicos de Natural Disaster / juegos
+        local mapKeywords = {"Floor", "Wall", "Roof", "Base", "Terrain", "Ground", "Platform", "Stair", "Step", "Door", "Window", "Ceil"}
+        for _, kw in pairs(mapKeywords) do
+            if string.find(Part.Name, kw) then return false end
         end
         Part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
         Part.CanCollide = false
@@ -844,6 +920,18 @@ local function stopHunt()
             hrp.AssemblyAngularVelocity = Vector3.zero
         end
     end)
+    -- [FIX NOCLIP] Restaurar CanCollide=true en todo el personaje al detener el hunt
+    -- Sin esto el personaje quedaba atravesando paredes indefinidamente
+    pcall(function()
+        local char = player.Character
+        if char then
+            for _, v in pairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    v.CanCollide = true
+                end
+            end
+        end
+    end)
     huntTarget = nil
 end
 
@@ -855,7 +943,7 @@ local function startHunt(targetPlayer)
 
     hunting = true
     pcall(function()
-        StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="TP Fling a: " .. huntTarget.Name, Duration=3})
+        StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER 🪐", Text="Fling imparable: " .. huntTarget.Name, Duration=3})
     end)
 
     local char = player.Character or player.CharacterAdded:Wait()
@@ -864,6 +952,7 @@ local function startHunt(targetPlayer)
 
     local oldCFrame = hrp.CFrame
 
+    -- BodyVelocity y BodyAngularVelocity para control total del personaje
     local bv = Instance.new("BodyVelocity", hrp)
     bv.Name = "HUNT_BV"
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -872,8 +961,10 @@ local function startHunt(targetPlayer)
     local bav = Instance.new("BodyAngularVelocity", hrp)
     bav.Name = "HUNT_BAV"
     bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bav.AngularVelocity = Vector3.new(0, 999999999, 0)
+    -- Spin extremo en todos los ejes para fling inmediato al tocar
+    bav.AngularVelocity = Vector3.new(999999999, 999999999, 999999999)
 
+    -- Noclip del jugador mientras caza (solo sus propias partes)
     connections.huntNoclip = RunService.Stepped:Connect(function()
         if not hunting then return end
         pcall(function()
@@ -883,6 +974,7 @@ local function startHunt(targetPlayer)
         end)
     end)
 
+    -- Beam visual
     att0 = Instance.new("Attachment", hrp)
     huntBeam = Instance.new("Beam", hrp)
     huntBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
@@ -892,12 +984,16 @@ local function startHunt(targetPlayer)
     huntBeam.Transparency = NumberSequence.new(0.3)
     huntBeam.Attachment0 = att0
 
+    -- Subir alto para evitar colision inicial con el suelo
     pcall(function()
         hrp.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0))
     end)
-    task.wait(0.1)
+    task.wait(0.05)
 
-    connections.hunt = RunService.Heartbeat:Connect(function()
+    -- [v4 HUNT MEJORADO] Loop Heartbeat: teletransporte cada frame + fling cada milisegundo
+    -- No importa si el objetivo salta, esquiva o corre - siempre lo alcanza
+    local flingTick = 0
+    connections.hunt = RunService.Heartbeat:Connect(function(dt)
         if not hunting then return end
         if not huntTarget or not huntTarget.Parent then
             stopHunt()
@@ -911,6 +1007,7 @@ local function startHunt(targetPlayer)
             local tHum = tChar and tChar:FindFirstChild("Humanoid")
 
             if tHrp and tHum and tHum.Health > 0 then
+                -- Highlight ESP en el objetivo
                 if not tChar:FindFirstChild("HUNT_ESP") then
                     huntHighlight = Instance.new("Highlight", tChar)
                     huntHighlight.Name = "HUNT_ESP"
@@ -919,16 +1016,32 @@ local function startHunt(targetPlayer)
                     huntHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
                 end
 
+                -- Actualizar beam al hrp del objetivo
                 if not att1 or att1.Parent ~= tHrp then
                     if att1 then att1:Destroy() end
                     att1 = Instance.new("Attachment", tHrp)
                     huntBeam.Attachment1 = att1
                 end
 
-                bav.AngularVelocity = Vector3.new(0, 999999999, 0)
+                -- Mantener spin maximo en todos los ejes
+                bav.AngularVelocity = Vector3.new(999999999, 999999999, 999999999)
+                bv.Velocity = Vector3.zero
+
+                -- [CORE] Teletransporte instantaneo encima del objetivo cada frame
+                -- No puede esquivar, no puede saltar para evitarlo, no puede correr
                 hrp.CFrame = tHrp.CFrame
+
+                -- Forzar AssemblyAngularVelocity directamente para fling garantizado
+                hrp.AssemblyAngularVelocity = Vector3.new(999999999, 999999999, 999999999)
                 hrp.AssemblyLinearVelocity = Vector3.zero
+
+                -- Tambien aplicar spin al objetivo para el fling visual
+                pcall(function()
+                    tHrp.AssemblyAngularVelocity = Vector3.new(999999999, 999999999, 999999999)
+                end)
+
             else
+                -- Objetivo muerto/salió del juego
                 stopHunt()
                 pcall(function()
                     hrp.AssemblyLinearVelocity = Vector3.zero
@@ -936,7 +1049,7 @@ local function startHunt(targetPlayer)
                     hrp.CFrame = oldCFrame
                 end)
                 pcall(function()
-                    StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Víctima Eliminada.", Duration=3})
+                    StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Victima Eliminada. 💀", Duration=3})
                 end)
             end
         end)
@@ -1175,6 +1288,17 @@ local function buildAndOrchestrate()
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
                     root.CFrame = oldCFrame
+                end)
+                -- [FIX v3 FLING] Restaurar CanCollide=true despues del fling para no quedar como fantasma
+                pcall(function()
+                    local character = LocalPlayer.Character
+                    if character then
+                        for _, v in pairs(character:GetDescendants()) do
+                            if v:IsA("BasePart") then
+                                v.CanCollide = true
+                            end
+                        end
+                    end
                 end)
                 return
             end
@@ -1530,6 +1654,14 @@ local function buildAndOrchestrate()
             end)
         end)
 
+        -- Botón Infinite Yield (comandos admin FE)
+        local iyBtn = spawnButton(scroll, "⚡ Infinite Yield", function()
+            pcall(function()
+                loadstring(game:HttpGet('https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source'))()
+            end)
+        end)
+        iyBtn.BackgroundColor3 = Color3.fromRGB(30, 60, 30)
+
         -- Botones panel TK
         local btnG = spawnButton(tkContent, T("GrabBtn"), grabTK)
         btnG.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1599,3 +1731,4 @@ else
 end
 
 print("🐙 PULPI V13.5 | TITAN ANNOUNCER + SUPER RING V4 LOADED")
+
