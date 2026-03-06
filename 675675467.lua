@@ -94,7 +94,9 @@ local SavedConfig = {
     RingRadius = 50,
     FlyActive = false,
     ESPActive = false,
-    HeadlessActive = false
+    HeadlessActive = false,
+    NoclipActive = false,
+    ESPColor = {1, 1, 1}  -- RGB 0-1
 }
 
 local tkPanelActive = false
@@ -102,35 +104,60 @@ local huntPanelActive = false
 local announcePanelActive = false
 local catalogPanelActive = false   -- NUEVO: estado del panel catálogo
 local headlessCache = {}
-local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil}
+local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil, noclip = nil}
+local espColor = Color3.new(1, 1, 1)  -- color actual del ESP, sincronizado con SavedConfig
 
 -- ==========================================
 -- [ AUTO-EXECUTE: NO FALL DAMAGE UNIVERSAL ]
 -- ==========================================
+-- ==========================================
+-- [ NO FALL DAMAGE - OPTIMIZADO SIN YIELD EN HEARTBEAT ]
+-- Detecta aterrizaje brusco y cancela el daño sin bloquear el frame
+-- ==========================================
 task.spawn(function()
     pcall(function() setclipboard("https://discord.gg/ypjMw5xmuj") end)
-    local rs = game:GetService("RunService")
-    local hb = rs.Heartbeat
-    local rsd = rs.RenderStepped
     local lp = game.Players.LocalPlayer
-    local z = Vector3.zero
-    local function f(c)
-        local r = c:WaitForChild("HumanoidRootPart", 5)
-        if not r then return end
-        local con
-        con = hb:Connect(function()
-            if not r.Parent then con:Disconnect() return end
-            pcall(function()
-                local v = r.AssemblyLinearVelocity
-                r.AssemblyLinearVelocity = z
-                rsd:Wait()
-                r.AssemblyLinearVelocity = v
-            end)
+    local FALL_THRESHOLD = -75  -- velocidad Y mínima para considerar "caída fatal"
+    local CANCEL_FRAMES  = 3    -- cuántos frames mantener velocidad cero al aterrizar
+
+    local function attachNFD(char)
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        local hum = char:WaitForChild("Humanoid", 5)
+        if not hrp or not hum then return end
+
+        local cancelFrames = 0
+        local savedVel    = Vector3.zero
+        local wasAirborne = false
+        local nfdConn
+
+        nfdConn = game:GetService("RunService").Heartbeat:Connect(function()
+            if not hrp.Parent then nfdConn:Disconnect() return end
+            local vel = hrp.AssemblyLinearVelocity
+
+            -- Detectar caída peligrosa
+            if vel.Y < FALL_THRESHOLD then
+                wasAirborne = true
+                savedVel = Vector3.new(vel.X, 0, vel.Z)
+            end
+
+            -- Al aterrizar, suprimir daño por unos frames
+            if wasAirborne and hum.FloorMaterial ~= Enum.Material.Air then
+                wasAirborne = false
+                cancelFrames = CANCEL_FRAMES
+            end
+
+            if cancelFrames > 0 then
+                cancelFrames = cancelFrames - 1
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.new(savedVel.X, 0, savedVel.Z)
+                end)
+            end
         end)
     end
-    f(lp.Character or lp.CharacterAdded:Wait())
-    lp.CharacterAdded:Connect(f)
-    print("¡NO FALL DAMAGE UNIVERSAL ACTIVADO! 🌪️💥")
+
+    attachNFD(lp.Character or lp.CharacterAdded:Wait())
+    lp.CharacterAdded:Connect(attachNFD)
+    print("¡NO FALL DAMAGE UNIVERSAL ACTIVADO (Optimizado)! 🌪️💥")
 end)
 
 -- ==========================================
@@ -278,6 +305,7 @@ end
 
 local function makeDraggable(guiObject)
     local dragging, dragInput, dragStart, startPos
+    local uisConn  -- ★ FIX: guardar conexión para poder limpiarla
     guiObject.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
@@ -293,11 +321,17 @@ local function makeDraggable(guiObject)
             dragInput = input
         end
     end)
-    UIS.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
+    -- ★ FIX: solo procesar cuando realmente se está arrastrando
+    uisConn = UIS.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input == dragInput then
             local delta = input.Position - dragStart
             guiObject.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
+    end)
+    -- Limpiar conexión si el objeto es destruido
+    guiObject.Destroying:Connect(function()
+        if uisConn then uisConn:Disconnect() uisConn = nil end
     end)
 end
 
@@ -311,18 +345,60 @@ local function applyMinimizeSystem(frame, normalSize, minSize, contentToHide)
     minBtn.Font = Enum.Font.GothamBold
     minBtn.TextScaled = true
     Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
+
     local isMinimized = false
+    local animConn = nil  -- single connection upvalue — no leaks
+
+    local function smoothAnimate(targetSize, showContent)
+        -- Cancelar animación previa desconectando el Heartbeat directamente
+        if animConn then animConn:Disconnect(); animConn = nil end
+
+        local startSize = frame.Size
+        local duration = 0.42
+
+        if showContent then contentToHide.Visible = true end
+
+        local elapsed = 0
+        animConn = RunService.Heartbeat:Connect(function(dt)
+            elapsed = elapsed + dt
+            local t = math.min(elapsed / duration, 1)
+
+            -- Quint InOut easing
+            local e
+            if t < 0.5 then
+                e = 16 * t * t * t * t * t
+            else
+                local f = (2 * t - 2)
+                e = 1 + f * f * f * f * f / 2
+            end
+
+            pcall(function()
+                frame.Size = UDim2.new(
+                    startSize.X.Scale  + (targetSize.X.Scale  - startSize.X.Scale)  * e,
+                    startSize.X.Offset + (targetSize.X.Offset - startSize.X.Offset) * e,
+                    startSize.Y.Scale  + (targetSize.Y.Scale  - startSize.Y.Scale)  * e,
+                    startSize.Y.Offset + (targetSize.Y.Offset - startSize.Y.Offset) * e
+                )
+            end)
+
+            if t >= 1 then
+                animConn:Disconnect()
+                animConn = nil
+                if not showContent then contentToHide.Visible = false end
+            end
+        end)
+    end
+
     minBtn.MouseButton1Click:Connect(function()
         isMinimized = not isMinimized
         minBtn.Text = isMinimized and "+" or "-"
-        contentToHide.Visible = not isMinimized
-        TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quint), { Size = isMinimized and minSize or normalSize }):Play()
+        smoothAnimate(isMinimized and minSize or normalSize, not isMinimized)
     end)
 end
 
 -- Limpiar GUIs anteriores
 pcall(function()
-    local oldGUIs = {"PULPI_GUI_V13_5", "PULPI_GUI_V13", "PULPI_GUI_V12", "TK_GUI_V12", "HUNT_GUI_V12", "CHAT_GUI_V13", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR", "CATALOG_GUI_V13"}
+    local oldGUIs = {"PULPI_GUI_V13_5", "PULPI_GUI_V13", "PULPI_GUI_V12", "TK_GUI_V12", "HUNT_GUI_V12", "CHAT_GUI_V13", "MOBILE_CONTROLS", "PULPO_INTRO", "LANG_SELECTOR", "CATALOG_GUI_V13", "ESP_COLOR_WHEEL"}
     for _, name in pairs(oldGUIs) do
         local obj = CoreGui:FindFirstChild(name) or player.PlayerGui:FindFirstChild(name)
         if obj then obj:Destroy() end
@@ -545,14 +621,44 @@ if not getgenv().Network then
             Part.CanCollide = false
         end
     end
+    -- ★ FIX: Limpiar partes eliminadas de Network.BaseParts para evitar el leak
+    getgenv().Network.RemovePart = function(Part)
+        local parts = getgenv().Network.BaseParts
+        for i = #parts, 1, -1 do
+            if parts[i] == Part then
+                table.remove(parts, i)
+                return
+            end
+        end
+    end
     local function EnablePartControl()
         LocalPlayer.ReplicationFocus = Workspace
-        RunService.Heartbeat:Connect(function()
+        local _networkCleanupTimer = 0
+        RunService.Heartbeat:Connect(function(dt)
+            -- ★ FIX: Limpiar partes muertas periódicamente (cada 15s) para el bug 60→12 FPS
+            _networkCleanupTimer = _networkCleanupTimer + dt
+            if _networkCleanupTimer >= 15 then
+                _networkCleanupTimer = 0
+                local parts = getgenv().Network.BaseParts
+                for i = #parts, 1, -1 do
+                    local p = parts[i]
+                    if not p or not p.Parent or not p:IsDescendantOf(Workspace) then
+                        table.remove(parts, i)
+                    end
+                end
+            end
+
             pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
-            for _, Part in pairs(getgenv().Network.BaseParts) do
+            local parts = getgenv().Network.BaseParts
+            local vel = getgenv().Network.Velocity
+            -- ★ FIX: Iterar en reverse para safe-remove de partes muertas on-the-fly
+            for i = #parts, 1, -1 do
+                local Part = parts[i]
                 pcall(function()
-                    if Part:IsDescendantOf(Workspace) then
-                        Part.AssemblyLinearVelocity = getgenv().Network.Velocity
+                    if Part and Part.Parent and Part:IsDescendantOf(Workspace) then
+                        Part.AssemblyLinearVelocity = vel
+                    else
+                        table.remove(parts, i)
                     end
                 end)
             end
@@ -621,26 +727,55 @@ end
 
 for _, part in pairs(Workspace:GetDescendants()) do addPart(part) end
 Workspace.DescendantAdded:Connect(addPart)
-Workspace.DescendantRemoving:Connect(removePart)
+Workspace.DescendantRemoving:Connect(function(part)
+    removePart(part)
+    -- ★ FIX: también limpiar de Network.BaseParts para evitar el leak
+    if getgenv().Network and getgenv().Network.RemovePart then
+        getgenv().Network.RemovePart(part)
+    end
+end)
 
-RunService.Heartbeat:Connect(function()
+-- ★ FIX RING: Throttle con acumulador de tiempo + culling de distancia
+local _ringDt = 0
+local _ringInterval = 1/30  -- actualizar ring a 30fps en vez de 60fps
+local _ringMaxRadius = 120  -- no procesar partes a más de 2x el radio máximo
+
+RunService.Heartbeat:Connect(function(dt)
     if not ringPartsEnabled then return end
+    _ringDt = _ringDt + dt
+    if _ringDt < _ringInterval then return end
+    _ringDt = 0
+
     local humanoidRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if humanoidRootPart then
-        local tornadoCenter = humanoidRootPart.Position
-        for _, part in pairs(partsRing) do
+    if not humanoidRootPart then return end
+
+    local tornadoCenter = humanoidRootPart.Position
+    local ringRadius    = SavedConfig.RingRadius
+    local cullRadius    = _ringMaxRadius * _ringMaxRadius  -- comparar distancia^2 sin sqrt
+
+    for i = #partsRing, 1, -1 do
+        local part = partsRing[i]
+        if not part or not part.Parent then
+            table.remove(partsRing, i)
+        else
             pcall(function()
-                if part.Parent and not part.Anchored then
+                if not part.Anchored then
                     local pos = part.Position
-                    local distance = (Vector3.new(pos.X, tornadoCenter.Y, pos.Z) - tornadoCenter).Magnitude
+                    -- ★ Cull: ignorar partes muy lejos para ahorrar cálculos
+                    local dx = pos.X - tornadoCenter.X
+                    local dz = pos.Z - tornadoCenter.Z
+                    if (dx*dx + dz*dz) > cullRadius then return end
+
+                    local distance = math.sqrt(dx*dx + dz*dz)
                     local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
                     local newAngle = angle + math.rad(rotationSpeed)
+                    local clampedDist = math.min(ringRadius, distance)
                     local targetPos = Vector3.new(
-                        tornadoCenter.X + math.cos(newAngle) * math.min(SavedConfig.RingRadius, distance),
+                        tornadoCenter.X + math.cos(newAngle) * clampedDist,
                         tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
-                        tornadoCenter.Z + math.sin(newAngle) * math.min(SavedConfig.RingRadius, distance)
+                        tornadoCenter.Z + math.sin(newAngle) * clampedDist
                     )
-                    local directionToTarget = (targetPos - part.Position).unit
+                    local directionToTarget = (targetPos - pos).unit
                     part.Velocity = directionToTarget * attractionStrength
                 end
             end)
@@ -803,24 +938,37 @@ local function manageESP(state)
     SaveData()
     if SavedConfig.ESPActive then
         if not connections.esp then
-            connections.esp = RunService.RenderStepped:Connect(function()
-                for _, p in pairs(Players:GetPlayers()) do
-                    pcall(function()
-                        if p ~= player and p.Character then
-                            if not p.Character:FindFirstChild("PULPI_ESP_V12") then
-                                local hl = Instance.new("Highlight", p.Character)
-                                hl.Name = "PULPI_ESP_V12"
-                                hl.FillTransparency = 1
-                                hl.OutlineColor = Color3.new(1, 1, 1)
-                                hl.OutlineTransparency = 0
+            -- ★ FIX ESP: No necesita correr en cada frame — los Highlights son persistentes.
+            -- Usamos un loop throttleado cada 2 segundos para agregar/limpiar highlights.
+            connections.esp = task.spawn(function()
+                while SavedConfig.ESPActive do
+                    for _, p in pairs(Players:GetPlayers()) do
+                        pcall(function()
+                            if p ~= player and p.Character then
+                                if not p.Character:FindFirstChild("PULPI_ESP_V12") then
+                                    local hl = Instance.new("Highlight", p.Character)
+                                    hl.Name = "PULPI_ESP_V12"
+                                    hl.FillTransparency = 1
+                                    hl.OutlineColor = espColor
+                                    hl.OutlineTransparency = 0
+                                else
+                                    -- Actualizar color si ya existe
+                                    p.Character.PULPI_ESP_V12.OutlineColor = espColor
+                                end
                             end
-                        end
-                    end)
+                        end)
+                    end
+                    task.wait(2)
                 end
             end)
         end
     else
-        if connections.esp then connections.esp:Disconnect() connections.esp = nil end
+        -- Detener el loop de ESP
+        SavedConfig.ESPActive = false
+        if connections.esp then
+            pcall(function() task.cancel(connections.esp) end)
+            connections.esp = nil
+        end
         for _, p in pairs(Players:GetPlayers()) do
             pcall(function()
                 if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then
@@ -832,8 +980,39 @@ local function manageESP(state)
 end
 
 -- ==========================================
--- [ TOXIC HUNTER ]
+-- [ NOCLIP ]
 -- ==========================================
+local function manageNoclip(state)
+    if state ~= nil then SavedConfig.NoclipActive = state else SavedConfig.NoclipActive = not SavedConfig.NoclipActive end
+    SaveData()
+    if SavedConfig.NoclipActive then
+        if not connections.noclip then
+            connections.noclip = RunService.Stepped:Connect(function()
+                pcall(function()
+                    local char = player.Character
+                    if not char then return end
+                    for _, part in pairs(char:GetDescendants()) do
+                        if part:IsA("BasePart") and part.CanCollide then
+                            part.CanCollide = false
+                        end
+                    end
+                end)
+            end)
+        end
+    else
+        if connections.noclip then connections.noclip:Disconnect() connections.noclip = nil end
+        pcall(function()
+            local char = player.Character
+            if char then
+                for _, part in pairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = true end
+                end
+            end
+        end)
+    end
+end
+
+
 local huntTarget = nil
 local huntHighlight = nil
 local huntBeam = nil
@@ -891,11 +1070,24 @@ local function startHunt(targetPlayer)
     bav.Name = "HUNT_BAV"
     bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
     bav.AngularVelocity = Vector3.new(999999999, 999999999, 999999999)
+    -- ★ FIX HUNT NOCLIP: Cachear partes en vez de GetDescendants() cada Stepped
+    local _huntNoclipParts = {}
+    local function _refreshHuntNoclipCache()
+        _huntNoclipParts = {}
+        for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then table.insert(_huntNoclipParts, v) end
+        end
+    end
+    _refreshHuntNoclipCache()
+    local _huntCacheConn = char.DescendantAdded:Connect(function(v)
+        if v:IsA("BasePart") then table.insert(_huntNoclipParts, v) end
+    end)
+
     connections.huntNoclip = RunService.Stepped:Connect(function()
-        if not hunting then return end
+        if not hunting then _huntCacheConn:Disconnect() return end
         pcall(function()
-            for _, v in pairs(char:GetDescendants()) do
-                if v:IsA("BasePart") then v.CanCollide = false end
+            for _, v in ipairs(_huntNoclipParts) do
+                if v and v.Parent then v.CanCollide = false end
             end
         end)
     end)
@@ -1234,6 +1426,16 @@ end
 -- ==========================================
 -- [ CONSTRUCCIÓN DE GUI Y ORQUESTACIÓN ]
 -- ==========================================
+local _menuAnimConn = nil  -- conexión de la animación del menú
+
+-- Inicializar espColor desde config guardado
+pcall(function()
+    local c = SavedConfig.ESPColor
+    if c and type(c) == "table" and #c == 3 then
+        espColor = Color3.new(c[1], c[2], c[3])
+    end
+end)
+
 local function buildAndOrchestrate()
     local mainLayer = Instance.new("ScreenGui", targetParent)
     mainLayer.Name = "PULPI_GUI_V12"
@@ -1294,25 +1496,70 @@ local function buildAndOrchestrate()
     local function handleMenuToggle()
         menuOpen = not menuOpen
         if isMobile then
-            menuBase.Visible = menuOpen
-            bgBlur.Size = menuOpen and 15 or 0
-        else
-            local tInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-            if menuOpen then
-                menuBase.Visible = true
-                TweenService:Create(menuBase, tInfo, {GroupTransparency = 0}):Play()
-                TweenService:Create(zoomScale, tInfo, {Scale = 1}):Play()
-                TweenService:Create(bgBlur, tInfo, {Size = 18}):Play()
-            else
-                local hide = TweenService:Create(menuBase, tInfo, {GroupTransparency = 1})
-                TweenService:Create(zoomScale, tInfo, {Scale = 0.85}):Play()
-                TweenService:Create(bgBlur, tInfo, {Size = 0}):Play()
-                hide:Play()
-                task.spawn(function()
-                    hide.Completed:Wait()
-                    if not menuOpen then menuBase.Visible = false end
+            -- Móvil: fade rápido (0.20s) en lugar de cambio instantáneo
+            if menuOpen then menuBase.Visible = true end
+            local targetTransp = menuOpen and 0 or 1
+            local startTransp = menuBase.BackgroundTransparency
+            local duration = 0.20
+            local elapsed = 0
+            if _menuAnimConn then _menuAnimConn:Disconnect() end
+            _menuAnimConn = RunService.Heartbeat:Connect(function(dt)
+                elapsed = elapsed + dt
+                local t = math.min(elapsed / duration, 1)
+                local e = menuOpen and (1-(1-t)*(1-t)*(1-t)) or (t*t*t)
+                pcall(function()
+                    menuBase.BackgroundTransparency = startTransp + (targetTransp - startTransp) * e
                 end)
-            end
+                if t >= 1 then
+                    _menuAnimConn:Disconnect(); _menuAnimConn = nil
+                    if not menuOpen then menuBase.Visible = false end
+                    bgBlur.Size = menuOpen and 15 or 0
+                end
+            end)
+        else
+            -- Animación suave frame-a-frame a 60fps (Quint easing)
+            local targetTransp = menuOpen and 0 or 1
+            local targetScale  = menuOpen and 1 or 0.82
+            local targetBlur   = menuOpen and 18 or 0
+            local duration     = 0.40
+
+            if menuOpen then menuBase.Visible = true end
+
+            local startTransp = menuBase.GroupTransparency
+            local startScale  = zoomScale.Scale
+            local startBlur   = bgBlur.Size
+            local elapsed     = 0
+
+            -- Cancelar animación previa si existe
+            if _menuAnimConn then _menuAnimConn:Disconnect() end
+
+            _menuAnimConn = RunService.Heartbeat:Connect(function(dt)
+                elapsed = elapsed + dt
+                local t = math.min(elapsed / duration, 1)
+
+                -- Easing Quint Out (t < 1) para apertura fluida, Quint In para cierre
+                local e
+                if menuOpen then
+                    -- Out: arranque rápido, frenado suave
+                    local f = 1 - t
+                    e = 1 - f*f*f*f*f
+                else
+                    -- In: arranque lento, aceleración al final
+                    e = t*t*t*t*t
+                end
+
+                pcall(function()
+                    menuBase.GroupTransparency = startTransp + (targetTransp - startTransp) * e
+                    zoomScale.Scale            = startScale  + (targetScale  - startScale)  * e
+                    bgBlur.Size                = startBlur   + (targetBlur   - startBlur)   * e
+                end)
+
+                if t >= 1 then
+                    _menuAnimConn:Disconnect()
+                    _menuAnimConn = nil
+                    if not menuOpen then menuBase.Visible = false end
+                end
+            end)
         end
     end
 
@@ -1432,10 +1679,15 @@ local function buildAndOrchestrate()
         forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
         local tensorForce = MathCore.CalculateTensorForce(100)
         forceA.AngularVelocity = Vector3.new(0, tensorForce, 0)
+        -- ★ FIX FLING NOCLIP: Cachear partes del personaje
+        local _flingParts = {}
+        for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then table.insert(_flingParts, v) end
+        end
         local noclipping = RunService.Stepped:Connect(function()
             pcall(function()
-                for _, v in pairs(char:GetDescendants()) do
-                    if v:IsA("BasePart") then v.CanCollide = false end
+                for _, v in ipairs(_flingParts) do
+                    if v and v.Parent then v.CanCollide = false end
                 end
             end)
         end)
@@ -1454,12 +1706,10 @@ local function buildAndOrchestrate()
                     root.AssemblyAngularVelocity = Vector3.zero
                     root.CFrame = oldCFrame
                 end)
+                -- ★ FIX: usar partes cacheadas en vez de GetDescendants otra vez
                 pcall(function()
-                    local character = LocalPlayer.Character
-                    if character then
-                        for _, v in pairs(character:GetDescendants()) do
-                            if v:IsA("BasePart") then v.CanCollide = true end
-                        end
+                    for _, v in ipairs(_flingParts) do
+                        if v and v.Parent then v.CanCollide = true end
                     end
                 end)
                 return
@@ -2024,8 +2274,13 @@ local function buildAndOrchestrate()
     -- CONSTRUCTORES UI PRINCIPAL
     -- ==========================================
     local function spawnButton(parentUI, name, callback)
-        local btn = Instance.new("TextButton", parentUI)
-        btn.Size = UIConfig.BtnSize
+        local btn = Instance.new("TextButton", parentUI or scroll)
+        -- Usar height en píxeles cuando está dentro de un frame con AutomaticSize Y
+        if parentUI and parentUI ~= scroll then
+            btn.Size = UDim2.new(1, 0, 0, isMobile and 48 or 36)
+        else
+            btn.Size = UIConfig.BtnSize
+        end
         btn.BackgroundColor3 = Color3.fromRGB(40, 50, 80)
         btn.Text = name
         btn.TextColor3 = Color3.new(1, 1, 1)
@@ -2036,10 +2291,15 @@ local function buildAndOrchestrate()
         return btn
     end
 
-    local function spawnSlider(configKey, labelName, min, max, callback)
+    local function spawnSlider(configKey, labelName, min, max, callback, parentUI)
         local start = SavedConfig[configKey]
-        local container = Instance.new("Frame", scroll)
-        container.Size = UIConfig.SliderContSize
+        local container = Instance.new("Frame", parentUI or scroll)
+        -- Usar height en píxeles cuando está dentro de un frame con AutomaticSize Y
+        if parentUI and parentUI ~= scroll then
+            container.Size = UDim2.new(1, 0, 0, isMobile and 60 or 50)
+        else
+            container.Size = UIConfig.SliderContSize
+        end
         container.BackgroundTransparency = 1
         local label = Instance.new("TextBox", container)
         label.Size = UDim2.fromScale(1, 0.45)
@@ -2050,8 +2310,13 @@ local function buildAndOrchestrate()
         label.Text = labelName .. ": " .. start
         label.ClearTextOnFocus = true
         local track = Instance.new("Frame", container)
-        track.Size = UIConfig.SliderTrackSize
-        track.Position = UDim2.fromScale(0, 0.55)
+        if parentUI and parentUI ~= scroll then
+            track.Size = UDim2.new(1, 0, 0, isMobile and 14 or 10)
+            track.Position = UDim2.new(0, 0, 1, -(isMobile and 18 or 14))
+        else
+            track.Size = UIConfig.SliderTrackSize
+            track.Position = UDim2.fromScale(0, 0.55)
+        end
         track.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
         Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
         local fill = Instance.new("Frame", track)
@@ -2102,52 +2367,421 @@ local function buildAndOrchestrate()
     end
 
     -- ==========================================
-    -- INSERCIÓN DE ELEMENTOS
+    -- INSERCIÓN DE ELEMENTOS (SECCIONES)
     -- ==========================================
+
+    -- Función helper para crear cabecera de sección
+    local function spawnSection(title, accentColor)
+        local sec = Instance.new("Frame", scroll)
+        sec.Size = UDim2.new(0.95, 0, 0, 36)
+        sec.BackgroundColor3 = accentColor or Color3.fromRGB(30, 35, 55)
+        sec.BackgroundTransparency = 0.3
+        sec.BorderSizePixel = 0
+        Instance.new("UICorner", sec).CornerRadius = UDim.new(0, 10)
+        local stroke = Instance.new("UIStroke", sec)
+        stroke.Color = accentColor or Color3.fromRGB(100, 120, 200)
+        stroke.Thickness = 1.5
+        local lbl = Instance.new("TextLabel", sec)
+        lbl.Size = UDim2.fromScale(1, 1)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = title
+        lbl.TextColor3 = Color3.new(1, 1, 1)
+        lbl.TextScaled = true
+        lbl.Font = Enum.Font.GothamBlack
+        return sec
+    end
+
+    -- Función helper para contenedor de sección (marco que agrupa los elementos)
+    local function spawnSectionFrame()
+        local frame = Instance.new("Frame", scroll)
+        frame.Size = UDim2.new(0.95, 0, 0, 0)
+        frame.AutomaticSize = Enum.AutomaticSize.Y
+        frame.BackgroundColor3 = Color3.fromRGB(18, 20, 32)
+        frame.BackgroundTransparency = 0.4
+        frame.BorderSizePixel = 0
+        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+        local stroke = Instance.new("UIStroke", frame)
+        stroke.Color = Color3.fromRGB(50, 55, 90)
+        stroke.Thickness = 1
+        local layout = Instance.new("UIListLayout", frame)
+        layout.Padding = UDim.new(0, 8)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        local pad = Instance.new("UIPadding", frame)
+        pad.PaddingTop = UDim.new(0, 10)
+        pad.PaddingBottom = UDim.new(0, 10)
+        pad.PaddingLeft = UDim.new(0, 10)
+        pad.PaddingRight = UDim.new(0, 10)
+        return frame
+    end
+
     task.spawn(function()
         task.wait(0.1)
 
+        -- ==============================
+        -- SECCIÓN: PLAYER 🎮
+        -- ==============================
+        spawnSection("🎮  PLAYER", Color3.fromRGB(60, 100, 220))
+        local playerFrame = spawnSectionFrame()
+
         spawnSlider("WalkSpeed", T("Speed"), 16, 400, function(v)
             pcall(function() player.Character.Humanoid.WalkSpeed = v end)
-        end)
+        end, playerFrame)
         spawnSlider("JumpPower", T("Jump"), 50, 500, function(v)
             pcall(function() player.Character.Humanoid.JumpPower = v end)
-        end)
+        end, playerFrame)
+        spawnButton(playerFrame, T("FlyBtn"), function() manageFlight() end)
         spawnSlider("FlySpeed", T("FlySpeed"), 30, 800, function(v)
             SavedConfig.FlySpeed = v
+        end, playerFrame)
+
+        -- Noclip toggle con indicador visual
+        local noclipBtn = spawnButton(playerFrame, "🚫 NOCLIP: OFF", function()
+            manageNoclip()
+            -- Actualizar visual desde el mismo callback (un solo handler)
+            if SavedConfig.NoclipActive then
+                noclipBtn.Text = "✅ NOCLIP: ON"
+                noclipBtn.BackgroundColor3 = Color3.fromRGB(30, 150, 80)
+            else
+                noclipBtn.Text = "🚫 NOCLIP: OFF"
+                noclipBtn.BackgroundColor3 = Color3.fromRGB(40, 50, 80)
+            end
         end)
+
+        -- ==============================
+        -- SECCIÓN: VISUALS 👁
+        -- ==============================
+        spawnSection("👁  VISUALS", Color3.fromRGB(100, 60, 200))
+        local visualsFrame = spawnSectionFrame()
+
+        spawnButton(visualsFrame, T("EspBtn"), function() manageESP() end)
+
+        -- ═══ RUEDA DE COLOR ESP ═══
+        -- Fila ESP: botón toggle + botón "color"
+        local espColorRow = Instance.new("Frame", visualsFrame)
+        espColorRow.Size = UDim2.new(1, 0, 0, isMobile and 48 or 36)
+        espColorRow.BackgroundTransparency = 1
+        espColorRow.BorderSizePixel = 0
+        local espRowLayout = Instance.new("UIListLayout", espColorRow)
+        espRowLayout.FillDirection = Enum.FillDirection.Horizontal
+        espRowLayout.Padding = UDim.new(0, 6)
+        espRowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+        -- Preview del color actual
+        local espColorPreview = Instance.new("Frame", espColorRow)
+        espColorPreview.Size = UDim2.fromOffset(isMobile and 48 or 36, isMobile and 44 or 32)
+        espColorPreview.BackgroundColor3 = espColor
+        espColorPreview.BorderSizePixel = 0
+        Instance.new("UICorner", espColorPreview).CornerRadius = UDim.new(0, 8)
+        local previewStroke = Instance.new("UIStroke", espColorPreview)
+        previewStroke.Color = Color3.new(1,1,1)
+        previewStroke.Thickness = 1.5
+
+        -- Botón que abre la rueda de colores
+        local espColorBtn = Instance.new("TextButton", espColorRow)
+        espColorBtn.Size = UDim2.new(1, -(isMobile and 54 or 42), 0, isMobile and 44 or 32)
+        espColorBtn.BackgroundColor3 = Color3.fromRGB(50, 40, 80)
+        espColorBtn.Text = "🎨 Color ESP"
+        espColorBtn.TextColor3 = Color3.new(1,1,1)
+        espColorBtn.TextScaled = true
+        espColorBtn.Font = Enum.Font.GothamBold
+        Instance.new("UICorner", espColorBtn).CornerRadius = UDim.new(0, 8)
+
+        -- === RUEDA DE COLORES (panel desplegable) ===
+        local colorWheelOpen = false
+        local colorWheelPanel = nil
+
+        local function buildColorWheel()
+            -- Panel flotante centrado
+            local cwGui = Instance.new("ScreenGui", targetParent)
+            cwGui.Name = "ESP_COLOR_WHEEL"
+            cwGui.IgnoreGuiInset = true
+            cwGui.DisplayOrder = 500
+
+            -- Tabla para limpiar conexiones UIS al cerrar (evitar memory leaks)
+            local uisConnsToClean = {}
+
+            local bg = Instance.new("Frame", cwGui)
+            bg.Size = UDim2.fromScale(1,1)
+            bg.BackgroundColor3 = Color3.fromRGB(0,0,0)
+            bg.BackgroundTransparency = 0.5
+
+            -- CanvasGroup para que GroupTransparency afecte TODO el panel + hijos
+            local panel = Instance.new("CanvasGroup", bg)
+            panel.Size = isMobile and UDim2.fromScale(0.78, 0.62) or UDim2.fromScale(0.38, 0.60)
+            panel.Position = UDim2.fromScale(0.5, 0.5)
+            panel.AnchorPoint = Vector2.new(0.5, 0.5)
+            panel.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
+            panel.BorderSizePixel = 0
+            Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 18)
+            local ps = Instance.new("UIStroke", panel)
+            ps.Color = Color3.fromRGB(140, 80, 255)
+            ps.Thickness = 2
+
+            -- Título
+            local titleLbl = Instance.new("TextLabel", panel)
+            titleLbl.Size = UDim2.new(1, -50, 0, 36)
+            titleLbl.Position = UDim2.fromOffset(0, 0)
+            titleLbl.BackgroundTransparency = 1
+            titleLbl.Text = "🎨 Color del ESP"
+            titleLbl.TextColor3 = Color3.fromRGB(200, 160, 255)
+            titleLbl.Font = Enum.Font.GothamBlack
+            titleLbl.TextScaled = true
+
+            -- Botón cerrar
+            local closeBtn = Instance.new("TextButton", panel)
+            closeBtn.Size = UDim2.fromOffset(30, 30)
+            closeBtn.Position = UDim2.new(1, -36, 0, 4)
+            closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+            closeBtn.Text = "✕"
+            closeBtn.TextColor3 = Color3.new(1,1,1)
+            closeBtn.TextScaled = true
+            closeBtn.Font = Enum.Font.GothamBold
+            Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+
+            -- Área de la rueda de colores: cuadrícula de colores predefinidos + sliders RGB
+            local body = Instance.new("Frame", panel)
+            body.Size = UDim2.new(1, -16, 1, -44)
+            body.Position = UDim2.fromOffset(8, 40)
+            body.BackgroundTransparency = 1
+
+            -- Grilla de colores preset (5 columnas x 5 filas = 25 colores)
+            local presetColors = {
+                Color3.new(1,1,1), Color3.new(0,0,0), Color3.fromRGB(180,180,180),
+                Color3.fromRGB(255,50,50), Color3.fromRGB(255,120,0),
+                Color3.fromRGB(255,220,0), Color3.fromRGB(80,220,80),Color3.fromRGB(0,200,100),
+                Color3.fromRGB(50,200,255), Color3.fromRGB(0,100,255),
+                Color3.fromRGB(100,50,255), Color3.fromRGB(200,50,255),
+                Color3.fromRGB(255,50,180), Color3.fromRGB(255,150,150), Color3.fromRGB(150,255,150),
+                Color3.fromRGB(150,200,255), Color3.fromRGB(255,200,100), Color3.fromRGB(200,255,200),
+                Color3.fromRGB(100,50,0), Color3.fromRGB(50,100,0),
+                Color3.fromRGB(0,50,100), Color3.fromRGB(100,0,50),
+                Color3.fromRGB(255,100,50), Color3.fromRGB(50,255,200), Color3.fromRGB(255,0,100),
+            }
+
+            local gridFrame = Instance.new("Frame", body)
+            gridFrame.Size = UDim2.new(1, 0, 0.55, 0)
+            gridFrame.BackgroundTransparency = 1
+            local grid = Instance.new("UIGridLayout", gridFrame)
+            grid.CellSize = UDim2.fromOffset(isMobile and 44 or 34, isMobile and 44 or 34)
+            grid.CellPadding = UDim2.fromOffset(5, 5)
+            grid.SortOrder = Enum.SortOrder.LayoutOrder
+
+            -- Preview grande del color seleccionado
+            local bigPreview = Instance.new("Frame", body)
+            bigPreview.Size = UDim2.new(0.22, 0, 0.35, 0)
+            bigPreview.Position = UDim2.new(0.78, 0, 0.58, 0)
+            bigPreview.BackgroundColor3 = espColor
+            Instance.new("UICorner", bigPreview).CornerRadius = UDim.new(0, 10)
+            Instance.new("UIStroke", bigPreview).Color = Color3.new(1,1,1)
+
+            -- Sliders RGB
+            local sliderArea = Instance.new("Frame", body)
+            sliderArea.Size = UDim2.new(0.74, 0, 0.42, 0)
+            sliderArea.Position = UDim2.new(0, 0, 0.57, 0)
+            sliderArea.BackgroundTransparency = 1
+            local sliderLayout = Instance.new("UIListLayout", sliderArea)
+            sliderLayout.Padding = UDim.new(0, 4)
+            sliderLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+            local currentRGB = {r = espColor.R, g = espColor.G, b = espColor.B}
+
+            local function applyColor()
+                local c = Color3.new(currentRGB.r, currentRGB.g, currentRGB.b)
+                espColor = c
+                SavedConfig.ESPColor = {c.R, c.G, c.B}
+                SaveData()
+                espColorPreview.BackgroundColor3 = c
+                bigPreview.BackgroundColor3 = c
+                -- Actualizar highlights existentes
+                for _, p in pairs(Players:GetPlayers()) do
+                    pcall(function()
+                        if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then
+                            p.Character.PULPI_ESP_V12.OutlineColor = c
+                        end
+                    end)
+                end
+            end
+
+            local function makeRGBSlider(label, key, color3)
+                local cont = Instance.new("Frame", sliderArea)
+                cont.Size = UDim2.new(1, 0, 0, isMobile and 22 or 18)
+                cont.BackgroundTransparency = 1
+                local lbl = Instance.new("TextLabel", cont)
+                lbl.Size = UDim2.fromOffset(isMobile and 22 or 16, isMobile and 22 or 18)
+                lbl.BackgroundTransparency = 1
+                lbl.Text = label
+                lbl.TextColor3 = color3
+                lbl.Font = Enum.Font.GothamBold
+                lbl.TextScaled = true
+                local track = Instance.new("Frame", cont)
+                track.Size = UDim2.new(1, -(isMobile and 26 or 20), 0, isMobile and 12 or 8)
+                track.Position = UDim2.fromOffset(isMobile and 24 or 18, isMobile and 5 or 5)
+                track.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+                Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+                local fill = Instance.new("Frame", track)
+                fill.BackgroundColor3 = color3
+                fill.Size = UDim2.fromScale(currentRGB[key], 1)
+                Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+                local draggingRGB = false
+                local function processRGB(input)
+                    local raw = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+                    local v = math.clamp(raw, 0, 1)
+                    fill.Size = UDim2.fromScale(v, 1)
+                    currentRGB[key] = v
+                    applyColor()
+                end
+                track.InputBegan:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                        draggingRGB = true; processRGB(i)
+                    end
+                end)
+                -- Guardar conexiones globales para poder desconectarlas al cerrar
+                local c1 = UIS.InputChanged:Connect(function(i)
+                    if draggingRGB and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+                        processRGB(i)
+                    end
+                end)
+                local c2 = UIS.InputEnded:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                        draggingRGB = false
+                    end
+                end)
+                table.insert(uisConnsToClean, c1)
+                table.insert(uisConnsToClean, c2)
+                return fill
+            end
+
+            makeRGBSlider("R", "r", Color3.fromRGB(255, 80, 80))
+            makeRGBSlider("G", "g", Color3.fromRGB(80, 220, 80))
+            makeRGBSlider("B", "b", Color3.fromRGB(80, 150, 255))
+
+            -- Botones de colores preset
+            for _, c in ipairs(presetColors) do
+                local swatch = Instance.new("TextButton", gridFrame)
+                swatch.Size = UDim2.fromOffset(isMobile and 44 or 34, isMobile and 44 or 34)
+                swatch.BackgroundColor3 = c
+                swatch.Text = ""
+                swatch.BorderSizePixel = 0
+                Instance.new("UICorner", swatch).CornerRadius = UDim.new(0, 6)
+                swatch.MouseButton1Click:Connect(function()
+                    currentRGB.r = c.R; currentRGB.g = c.G; currentRGB.b = c.B
+                    applyColor()
+                    -- Reanimar fills de sliders
+                    for _, child in pairs(sliderArea:GetDescendants()) do
+                        if child:IsA("Frame") and child.Name == "" and child.Parent and child.Parent:IsA("Frame") then
+                            -- skip, handled by applyColor
+                        end
+                    end
+                end)
+            end
+
+            -- Animación de entrada del panel (suave, desde escala 0.8)
+            local scaleIn = Instance.new("UIScale", panel)
+            scaleIn.Scale = 0.82
+            panel.GroupTransparency = 1  -- CanvasGroup: afecta hijos también
+            local entryElapsed = 0
+            local entryConn
+            entryConn = RunService.Heartbeat:Connect(function(dt)
+                entryElapsed = entryElapsed + dt
+                local t = math.min(entryElapsed / 0.28, 1)
+                local f = 1 - (1-t)*(1-t)*(1-t)  -- ease out cubic
+                scaleIn.Scale = 0.82 + (1 - 0.82) * f
+                panel.GroupTransparency = 1 - f
+                if t >= 1 then entryConn:Disconnect() end
+            end)
+
+            local function closeWheel()
+                -- Limpiar conexiones UIS antes de destruir
+                for _, conn in ipairs(uisConnsToClean) do
+                    pcall(function() conn:Disconnect() end)
+                end
+                table.clear(uisConnsToClean)
+                -- Animación de salida
+                local exitElapsed = 0
+                local startScale = scaleIn.Scale
+                local exitConn
+                exitConn = RunService.Heartbeat:Connect(function(dt)
+                    exitElapsed = exitElapsed + dt
+                    local t = math.min(exitElapsed / 0.20, 1)
+                    local e = t * t * t
+                    scaleIn.Scale = startScale + (0.80 - startScale) * e
+                    panel.GroupTransparency = e
+                    if t >= 1 then
+                        exitConn:Disconnect()
+                        cwGui:Destroy()
+                        colorWheelOpen = false
+                        colorWheelPanel = nil
+                    end
+                end)
+            end
+
+            closeBtn.MouseButton1Click:Connect(closeWheel)
+            bg.InputBegan:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                    -- Cerrar si click fuera del panel
+                    local mx, my = i.Position.X, i.Position.Y
+                    local px, py = panel.AbsolutePosition.X, panel.AbsolutePosition.Y
+                    local pw, ph = panel.AbsoluteSize.X, panel.AbsoluteSize.Y
+                    if mx < px or mx > px+pw or my < py or my > py+ph then
+                        closeWheel()
+                    end
+                end
+            end)
+
+            colorWheelPanel = cwGui
+        end
+
+        espColorBtn.MouseButton1Click:Connect(function()
+            if colorWheelOpen then
+                if colorWheelPanel then colorWheelPanel:Destroy() end
+                colorWheelOpen = false; colorWheelPanel = nil
+            else
+                colorWheelOpen = true
+                buildColorWheel()
+            end
+        end)
+
+        spawnButton(visualsFrame, T("Headless"), function() toggleHeadlessFE() end)
+
+        -- ==============================
+        -- SECCIÓN: TROLL 😈
+        -- ==============================
+        spawnSection("😈  TROLL", Color3.fromRGB(180, 40, 40))
+        local trollFrame = spawnSectionFrame()
+
         spawnSlider("RingRadius", T("Radius"), 5, 1000, function(v)
             SavedConfig.RingRadius = v
-        end)
+        end, trollFrame)
+        spawnButton(trollFrame, T("TornadoBtn"), toggleTornado)
 
-        spawnButton(scroll, T("Headless"), function() toggleHeadlessFE() end)
-        spawnButton(scroll, T("FlyBtn"), function() manageFlight() end)
-        spawnButton(scroll, T("EspBtn"), function() manageESP() end)
-        spawnButton(scroll, T("TornadoBtn"), toggleTornado)
-
-        spawnButton(scroll, T("FlingMenuBtn"), function()
+        spawnButton(trollFrame, T("FlingMenuBtn"), function()
             tkPanelActive = not tkPanelActive
             tkPanel.Visible = tkPanelActive
             crosshair.Visible = tkPanelActive
             if not tkPanelActive then releaseTK() end
         end)
 
-        local huntBtn = spawnButton(scroll, T("HuntMenuBtn"), function()
+        local huntBtn = spawnButton(trollFrame, T("HuntMenuBtn"), function()
             huntPanelActive = not huntPanelActive
             huntPanel.Visible = huntPanelActive
             if huntPanelActive then populatePlayers() end
         end)
         huntBtn.BackgroundColor3 = Color3.fromRGB(80, 20, 20)
 
-        -- =========================================
+        -- ==============================
+        -- SECCIÓN: EXTRAS ⚡
+        -- ==============================
+        spawnSection("⚡  EXTRAS", Color3.fromRGB(40, 100, 60))
+        local extrasFrame = spawnSectionFrame()
 
-        spawnButton(scroll, "MM2 (SnapSanix)", function()
+        spawnButton(extrasFrame, "MM2 (SnapSanix)", function()
             pcall(function()
                 loadstring(game:HttpGet('https://raw.githubusercontent.com/Roman34296589/SnapSanixHUB/refs/heads/main/SnapSanixHUB.lua'))()
             end)
         end)
 
-        local iyBtn = spawnButton(scroll, "⚡ Infinite Yield", function()
+        local iyBtn = spawnButton(extrasFrame, "⚡ Infinite Yield", function()
             pcall(function()
                 loadstring(game:HttpGet('https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source'))()
             end)
@@ -2198,6 +2832,7 @@ local function buildAndOrchestrate()
         if SavedConfig.FlyActive then manageFlight(true) end
         if SavedConfig.HeadlessActive then toggleHeadlessFE(true) end
         if SavedConfig.ESPActive then manageESP(true) end
+        if SavedConfig.NoclipActive then manageNoclip(true) end
         -- Al respawnear, limpiar track de emote (el personaje nuevo no lo tiene)
         currentAnimTrack = nil
     end)
@@ -6045,8 +6680,13 @@ enterHUDEditor = function()
     if not exists then State.hudEditorActive = false; return end
     emotesWheel.Visible = true
 
-    HUD.ForceVisibleConn = RunService.Heartbeat:Connect(function()
+    -- ★ FIX: Throttle para no llamar checkEmotesMenuExists cada frame durante HUD editor
+    local _hudForceDt = 0
+    HUD.ForceVisibleConn = RunService.Heartbeat:Connect(function(dt)
         if not State.hudEditorActive then return end
+        _hudForceDt = _hudForceDt + dt
+        if _hudForceDt < 0.1 then return end  -- 10 veces/segundo es suficiente
+        _hudForceDt = 0
         pcall(function()
             local _, ew = checkEmotesMenuExists()
             if ew then ew.Visible = true end
@@ -6333,12 +6973,20 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 
-local heartbeatConnection = RunService.Heartbeat:Connect(function()
+-- ★ FIX: updateGUIColors NO necesita correr cada frame.
+-- Se llama solo cuando el tema cambia (via ApplyTheme) o al crear la GUI.
+-- El Heartbeat solo vigila si la GUI fue destruida (barato) con throttle.
+local _guiCheckTimer = 0
+local _guiCheckInterval = 0.5  -- revisar integridad GUI cada 0.5s en vez de cada frame
+local heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+    _guiCheckTimer = _guiCheckTimer + dt
+    if _guiCheckTimer < _guiCheckInterval then return end
+    _guiCheckTimer = 0
+
     if not State.isGUICreated then
         checkAndRecreateGUI()
-    else
-        updateGUIColors()
     end
+    -- updateGUIColors() se llama solo desde ApplyTheme/createGUIElements, no aquí
 end)
 
 
@@ -6353,7 +7001,9 @@ local function safeFind(path, name)
     return nil
 end
 
+-- ★ FIX: Guard para no ejecutar si no hay track activo ni GUI
 RunService.Stepped:Connect(function()
+    if not State.isGUICreated then return end
     if humanoid and State.currentEmoteTrack and State.currentEmoteTrack.IsPlaying then
         if humanoid.MoveDirection.Magnitude > 0 then
             if State.speedEmoteEnabled and not State.emotesWalkEnabled then
@@ -6447,3 +7097,781 @@ else
 end
 
 print("🐙 PULPI V13.5 | TITAN ANNOUNCER + SUPER RING V4 + CATALOG EMOTES FE + 7YD7 EMOTES LOADED")
+
+-- ==========================================
+-- [ PULPI CMD - COMMAND WINDOW ]
+-- ==========================================
+task.spawn(function()
+    task.wait(2) -- Wait for GUI to fully load
+
+    local RunService2  = game:GetService("RunService")
+    local Players2     = game:GetService("Players")
+    local UIS2         = game:GetService("UserInputService")
+    local lplr         = Players2.LocalPlayer
+    local gui2parent   = (pcall(function() return game:GetService("CoreGui").Name end)) and game:GetService("CoreGui") or lplr.PlayerGui
+
+    -- ── State ──────────────────────────────────────────
+    local cmdGender   = "nb"     -- nb | male | female
+    local pronouns    = { nb = "they/them", male = "he/him", female = "she/her" }
+    local cmdLang     = SavedConfig and SavedConfig.Lang or "en"
+    local cmdHistory  = {}
+    local histIdx     = 0
+    local ndsActive   = false
+    local ndsConn     = nil
+    local luauOpen    = false
+    local luauGui     = nil
+
+    -- ── CMD GUI ────────────────────────────────────────
+    local cmdScreen = Instance.new("ScreenGui", gui2parent)
+    cmdScreen.Name           = "PULPI_CMD"
+    cmdScreen.IgnoreGuiInset = true
+    cmdScreen.DisplayOrder   = 200
+    cmdScreen.ResetOnSpawn   = false
+
+    local W  = isMobile and 0.90 or 0.52
+    local H  = isMobile and 0.55 or 0.48
+    local cmdFrame = Instance.new("CanvasGroup", cmdScreen)
+    cmdFrame.Size            = UDim2.fromScale(W, H)
+    cmdFrame.Position        = UDim2.fromScale(0.5, 0.5)
+    cmdFrame.AnchorPoint     = Vector2.new(0.5, 0.5)
+    cmdFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 16)
+    cmdFrame.GroupTransparency = 1
+    cmdFrame.Visible          = false
+    cmdFrame.Active           = true
+    Instance.new("UICorner", cmdFrame).CornerRadius = UDim.new(0, 14)
+    local fStroke = Instance.new("UIStroke", cmdFrame)
+    fStroke.Color     = Color3.fromRGB(80, 200, 120)
+    fStroke.Thickness = 2
+
+    -- Drag
+    local dragActive, dragStart, dragOrigin = false, nil, nil
+    cmdFrame.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragActive = true; dragStart = i.Position
+            dragOrigin = cmdFrame.Position
+        end
+    end)
+    UIS2.InputChanged:Connect(function(i)
+        if dragActive and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            cmdFrame.Position = UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset + d.X, dragOrigin.Y.Scale, dragOrigin.Y.Offset + d.Y)
+        end
+    end)
+    UIS2.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragActive = false end
+    end)
+
+    -- Title bar
+    local titleBar = Instance.new("Frame", cmdFrame)
+    titleBar.Size             = UDim2.new(1, 0, 0, 32)
+    titleBar.BackgroundColor3 = Color3.fromRGB(20, 28, 20)
+    titleBar.BorderSizePixel  = 0
+    Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 14)
+
+    local titleLbl = Instance.new("TextLabel", titleBar)
+    titleLbl.Size              = UDim2.new(1, -36, 1, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text              = "🖥  PULPI CMD"
+    titleLbl.TextColor3        = Color3.fromRGB(80, 230, 120)
+    titleLbl.Font              = Enum.Font.Code
+    titleLbl.TextScaled        = true
+
+    local closeBtn = Instance.new("TextButton", titleBar)
+    closeBtn.Size             = UDim2.fromOffset(26, 26)
+    closeBtn.Position         = UDim2.new(1, -30, 0, 3)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    closeBtn.Text             = "✕"
+    closeBtn.TextColor3       = Color3.new(1,1,1)
+    closeBtn.TextScaled       = true
+    closeBtn.Font             = Enum.Font.GothamBold
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+
+    -- Output log
+    local logFrame = Instance.new("ScrollingFrame", cmdFrame)
+    logFrame.Size                 = UDim2.new(1, -12, 1, -80)
+    logFrame.Position             = UDim2.fromOffset(6, 36)
+    logFrame.BackgroundColor3     = Color3.fromRGB(6, 8, 12)
+    logFrame.BorderSizePixel      = 0
+    logFrame.ScrollBarThickness   = 4
+    logFrame.ScrollingDirection   = Enum.ScrollingDirection.Y
+    logFrame.AutomaticCanvasSize  = Enum.AutomaticSize.Y
+    logFrame.CanvasSize           = UDim2.fromScale(0, 0)
+    Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 8)
+    local logLayout = Instance.new("UIListLayout", logFrame)
+    logLayout.Padding      = UDim.new(0, 2)
+    logLayout.SortOrder    = Enum.SortOrder.LayoutOrder
+    local logPad = Instance.new("UIPadding", logFrame)
+    logPad.PaddingLeft   = UDim.new(0, 6)
+    logPad.PaddingRight  = UDim.new(0, 6)
+    logPad.PaddingTop    = UDim.new(0, 4)
+    logPad.PaddingBottom = UDim.new(0, 4)
+
+    -- Input row
+    local inputRow = Instance.new("Frame", cmdFrame)
+    inputRow.Size             = UDim2.new(1, -12, 0, isMobile and 36 or 30)
+    inputRow.Position         = UDim2.new(0, 6, 1, -(isMobile and 42 or 36))
+    inputRow.BackgroundTransparency = 1
+
+    local inputBox = Instance.new("TextBox", inputRow)
+    inputBox.Size             = UDim2.new(1, -(isMobile and 68 or 58), 1, 0)
+    inputBox.BackgroundColor3 = Color3.fromRGB(14, 20, 14)
+    inputBox.TextColor3       = Color3.fromRGB(100, 255, 140)
+    inputBox.PlaceholderText  = "> type a command..."
+    inputBox.PlaceholderColor3 = Color3.fromRGB(50, 90, 60)
+    inputBox.Font             = Enum.Font.Code
+    inputBox.TextScaled       = true
+    inputBox.Text             = ""
+    inputBox.ClearTextOnFocus = false
+    Instance.new("UICorner", inputBox).CornerRadius = UDim.new(0, 6)
+
+    local runBtn = Instance.new("TextButton", inputRow)
+    runBtn.Size             = UDim2.new(0, isMobile and 62 or 52, 1, 0)
+    runBtn.Position         = UDim2.new(1, -(isMobile and 62 or 52), 0, 0)
+    runBtn.BackgroundColor3 = Color3.fromRGB(30, 120, 60)
+    runBtn.Text             = "RUN ▶"
+    runBtn.TextColor3       = Color3.new(1,1,1)
+    runBtn.TextScaled       = true
+    runBtn.Font             = Enum.Font.GothamBold
+    Instance.new("UICorner", runBtn).CornerRadius = UDim.new(0, 6)
+
+    -- ── Log helper ────────────────────────────────────
+    local logCount = 0
+    local colorMap = {
+        ok      = Color3.fromRGB(80,  230, 120),
+        err     = Color3.fromRGB(255, 80,  80),
+        info    = Color3.fromRGB(120, 180, 255),
+        warn    = Color3.fromRGB(255, 200, 60),
+        sys     = Color3.fromRGB(180, 120, 255),
+        muted   = Color3.fromRGB(80,  90,  80),
+    }
+
+    local function log(msg, kind)
+        logCount = logCount + 1
+        local lbl = Instance.new("TextLabel", logFrame)
+        lbl.LayoutOrder        = logCount
+        lbl.Size               = UDim2.new(1, 0, 0, 0)
+        lbl.AutomaticSize      = Enum.AutomaticSize.Y
+        lbl.BackgroundTransparency = 1
+        lbl.Text               = msg
+        lbl.TextColor3         = colorMap[kind or "ok"] or colorMap.ok
+        lbl.Font               = Enum.Font.Code
+        lbl.TextXAlignment     = Enum.TextXAlignment.Left
+        lbl.TextWrapped        = true
+        lbl.RichText           = true
+        lbl.TextSize           = isMobile and 13 or 12
+        -- Scroll to bottom
+        task.defer(function()
+            logFrame.CanvasPosition = Vector2.new(0, logFrame.AbsoluteCanvasSize.Y)
+        end)
+    end
+
+    -- ── Toggle animation ──────────────────────────────
+    local cmdVisible = false
+    local cmdAnimConn = nil
+
+    local function toggleCmd()
+        cmdVisible = not cmdVisible
+        if cmdVisible then cmdFrame.Visible = true end
+        local target = cmdVisible and 0 or 1
+        if cmdAnimConn then cmdAnimConn:Disconnect() end
+        local elapsed, start = 0, cmdFrame.GroupTransparency
+        cmdAnimConn = RunService2.Heartbeat:Connect(function(dt)
+            elapsed = elapsed + dt
+            local t = math.min(elapsed / 0.25, 1)
+            local e = cmdVisible and (1-(1-t)^3) or (t^3)
+            pcall(function() cmdFrame.GroupTransparency = start + (target - start) * e end)
+            if t >= 1 then
+                cmdAnimConn:Disconnect(); cmdAnimConn = nil
+                if not cmdVisible then cmdFrame.Visible = false end
+            end
+        end)
+    end
+
+    -- ── NDS Bypass ────────────────────────────────────
+    local function startNDS()
+        if ndsConn then return end
+        log("[NDS] Bypass active: fall damage + fly damage off", "sys")
+        ndsConn = RunService2.Heartbeat:Connect(function()
+            pcall(function()
+                local char = lplr.Character
+                if not char then return end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hum or not hrp then return end
+                -- Anti-fall damage: keep MaxHealth synced and reset health
+                if hum.Health < hum.MaxHealth * 0.5 then
+                    hum.Health = hum.MaxHealth
+                end
+                -- Anti-velocity-damage: if flying fast, cap downward velocity
+                local vel = hrp.AssemblyLinearVelocity
+                if math.abs(vel.Y) > 80 then
+                    hrp.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+                end
+            end)
+        end)
+        ndsActive = true
+    end
+
+    local function stopNDS()
+        if ndsConn then ndsConn:Disconnect(); ndsConn = nil end
+        ndsActive = false
+        log("[NDS] Bypass deactivated", "warn")
+    end
+
+    -- ── Luau Executor ─────────────────────────────────
+    local function openLuauExecutor()
+        if luauOpen and luauGui then
+            luauGui:Destroy(); luauOpen = false; luauGui = nil
+            log("[LUAU] Executor closed", "muted")
+            return
+        end
+
+        luauOpen = true
+        luauGui = Instance.new("ScreenGui", gui2parent)
+        luauGui.Name           = "PULPI_LUAU_EXEC"
+        luauGui.IgnoreGuiInset = true
+        luauGui.DisplayOrder   = 300
+        luauGui.ResetOnSpawn   = false
+
+        local LW = isMobile and 0.92 or 0.55
+        local LH = isMobile and 0.70 or 0.60
+        local execFrame = Instance.new("CanvasGroup", luauGui)
+        execFrame.Size             = UDim2.fromScale(LW, LH)
+        execFrame.Position         = UDim2.fromScale(0.5, 0.45)
+        execFrame.AnchorPoint      = Vector2.new(0.5, 0.5)
+        execFrame.BackgroundColor3 = Color3.fromRGB(8, 10, 18)
+        execFrame.GroupTransparency = 1
+        execFrame.Active           = true
+        Instance.new("UICorner", execFrame).CornerRadius = UDim.new(0, 14)
+        local eStroke = Instance.new("UIStroke", execFrame)
+        eStroke.Color     = Color3.fromRGB(120, 80, 255)
+        eStroke.Thickness = 2
+
+        -- Drag executor
+        local eDragActive, eDragStart, eDragOrigin = false, nil, nil
+        execFrame.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                eDragActive = true; eDragStart = i.Position; eDragOrigin = execFrame.Position
+            end
+        end)
+        UIS2.InputChanged:Connect(function(i)
+            if eDragActive and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+                local d = i.Position - eDragStart
+                execFrame.Position = UDim2.new(eDragOrigin.X.Scale, eDragOrigin.X.Offset + d.X, eDragOrigin.Y.Scale, eDragOrigin.Y.Offset + d.Y)
+            end
+        end)
+        UIS2.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then eDragActive = false end
+        end)
+
+        -- Title
+        local eTitleBar = Instance.new("Frame", execFrame)
+        eTitleBar.Size             = UDim2.new(1, 0, 0, 32)
+        eTitleBar.BackgroundColor3 = Color3.fromRGB(14, 10, 28)
+        eTitleBar.BorderSizePixel  = 0
+        Instance.new("UICorner", eTitleBar).CornerRadius = UDim.new(0, 14)
+
+        local eTitleLbl = Instance.new("TextLabel", eTitleBar)
+        eTitleLbl.Size              = UDim2.new(1, -36, 1, 0)
+        eTitleLbl.BackgroundTransparency = 1
+        eTitleLbl.Text              = "⚡  PULPI LUAU EXECUTOR"
+        eTitleLbl.TextColor3        = Color3.fromRGB(160, 100, 255)
+        eTitleLbl.Font              = Enum.Font.Code
+        eTitleLbl.TextScaled        = true
+
+        local eCloseBtn = Instance.new("TextButton", eTitleBar)
+        eCloseBtn.Size             = UDim2.fromOffset(26, 26)
+        eCloseBtn.Position         = UDim2.new(1, -30, 0, 3)
+        eCloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        eCloseBtn.Text             = "✕"
+        eCloseBtn.TextColor3       = Color3.new(1,1,1)
+        eCloseBtn.TextScaled       = true
+        eCloseBtn.Font             = Enum.Font.GothamBold
+        Instance.new("UICorner", eCloseBtn).CornerRadius = UDim.new(0, 6)
+
+        -- Code editor area
+        local editorScroll = Instance.new("ScrollingFrame", execFrame)
+        editorScroll.Size                = UDim2.new(1, -12, 1, -104)
+        editorScroll.Position            = UDim2.fromOffset(6, 36)
+        editorScroll.BackgroundColor3    = Color3.fromRGB(6, 8, 16)
+        editorScroll.BorderSizePixel     = 0
+        editorScroll.ScrollBarThickness  = 4
+        editorScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        editorScroll.CanvasSize          = UDim2.fromScale(0, 0)
+        Instance.new("UICorner", editorScroll).CornerRadius = UDim.new(0, 8)
+
+        local codeBox = Instance.new("TextBox", editorScroll)
+        codeBox.Size               = UDim2.new(1, -8, 0, 0)
+        codeBox.AutomaticSize      = Enum.AutomaticSize.Y
+        codeBox.Position           = UDim2.fromOffset(4, 2)
+        codeBox.BackgroundTransparency = 1
+        codeBox.TextColor3         = Color3.fromRGB(200, 220, 255)
+        codeBox.PlaceholderText    = "-- write Luau here\nprint(\"hello from PULPI executor\")\n\n-- loadstring example:\n-- loadstring(game:HttpGet(\"https://...\"))()"
+        codeBox.PlaceholderColor3  = Color3.fromRGB(60, 70, 100)
+        codeBox.Font               = Enum.Font.Code
+        codeBox.TextSize           = isMobile and 14 or 13
+        codeBox.MultiLine          = true
+        codeBox.TextXAlignment     = Enum.TextXAlignment.Left
+        codeBox.TextYAlignment     = Enum.TextYAlignment.Top
+        codeBox.TextWrapped        = false
+        codeBox.ClearTextOnFocus   = false
+        codeBox.Text               = ""
+
+        -- Output console
+        local execOutput = Instance.new("ScrollingFrame", execFrame)
+        execOutput.Size                = UDim2.new(1, -12, 0, isMobile and 54 or 46)
+        execOutput.Position            = UDim2.new(0, 6, 1, -(isMobile and 64 or 56))
+        execOutput.BackgroundColor3    = Color3.fromRGB(4, 6, 10)
+        execOutput.BorderSizePixel     = 0
+        execOutput.ScrollBarThickness  = 3
+        execOutput.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        execOutput.CanvasSize          = UDim2.fromScale(0, 0)
+        Instance.new("UICorner", execOutput).CornerRadius = UDim.new(0, 6)
+        local outLayout = Instance.new("UIListLayout", execOutput)
+        outLayout.Padding   = UDim.new(0, 1)
+        local outPad = Instance.new("UIPadding", execOutput)
+        outPad.PaddingLeft = UDim.new(0, 4)
+
+        local outCount = 0
+        local function execLog(msg, isErr)
+            outCount = outCount + 1
+            local o = Instance.new("TextLabel", execOutput)
+            o.LayoutOrder = outCount
+            o.Size              = UDim2.new(1, 0, 0, 0)
+            o.AutomaticSize     = Enum.AutomaticSize.Y
+            o.BackgroundTransparency = 1
+            o.Text              = (isErr and "❌ " or "▶ ") .. tostring(msg)
+            o.TextColor3        = isErr and Color3.fromRGB(255,80,80) or Color3.fromRGB(140,255,160)
+            o.Font              = Enum.Font.Code
+            o.TextSize          = isMobile and 13 or 11
+            o.TextXAlignment    = Enum.TextXAlignment.Left
+            o.TextWrapped       = true
+            task.defer(function()
+                execOutput.CanvasPosition = Vector2.new(0, execOutput.AbsoluteCanvasSize.Y)
+            end)
+        end
+
+        -- Action buttons
+        local btnRow = Instance.new("Frame", execFrame)
+        btnRow.Size             = UDim2.new(1, -12, 0, isMobile and 34 or 28)
+        btnRow.Position         = UDim2.new(0, 6, 1, -(isMobile and 30 or 24))
+        btnRow.BackgroundTransparency = 1
+        local bLayout = Instance.new("UIListLayout", btnRow)
+        bLayout.FillDirection  = Enum.FillDirection.Horizontal
+        bLayout.Padding        = UDim.new(0, 6)
+
+        local function makeBtn(text, bgColor)
+            local b = Instance.new("TextButton", btnRow)
+            b.Size             = UDim2.fromOffset(0, isMobile and 30 or 24)
+            b.AutomaticSize    = Enum.AutomaticSize.X
+            b.BackgroundColor3 = bgColor
+            b.Text             = "  " .. text .. "  "
+            b.TextColor3       = Color3.new(1,1,1)
+            b.TextScaled       = true
+            b.Font             = Enum.Font.GothamBold
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            return b
+        end
+
+        local runBtn2   = makeBtn("▶ Execute",  Color3.fromRGB(40, 130, 60))
+        local clearBtn  = makeBtn("🗑 Clear",    Color3.fromRGB(60, 60, 90))
+        local resetBtn  = makeBtn("↩ Reset",    Color3.fromRGB(80, 40, 40))
+
+        -- Execute logic — full loadstring + getfenv support
+        local function executeCode()
+            local code = codeBox.Text
+            if code == "" then execLog("No code to run", true) return end
+            execLog("Running...", false)
+            local fn, compileErr = loadstring(code)
+            if not fn then
+                execLog("Compile error: " .. tostring(compileErr), true)
+                return
+            end
+            -- Give the chunk access to getfenv / full environment
+            local env = setmetatable({
+                print = function(...)
+                    local args = {...}
+                    for i, v in ipairs(args) do args[i] = tostring(v) end
+                    execLog(table.concat(args, "\t"), false)
+                end,
+                warn = function(...)
+                    local args = {...}
+                    for i, v in ipairs(args) do args[i] = tostring(v) end
+                    execLog("[WARN] " .. table.concat(args, "\t"), true)
+                end,
+                error = function(msg)
+                    execLog("[ERROR] " .. tostring(msg), true)
+                end,
+                loadstring = loadstring,
+                getfenv    = getfenv,
+                setfenv    = setfenv,
+                game       = game,
+                workspace  = workspace,
+                script     = script,
+                getgenv    = getgenv,
+                getsenv    = (typeof(getsenv) == "function") and getsenv or nil,
+                getrenv    = (typeof(getrenv) == "function") and getrenv or nil,
+            }, {__index = getfenv and getfenv(0) or _G})
+            pcall(function() setfenv(fn, env) end)
+            local ok, err = pcall(fn)
+            if not ok then execLog("Runtime error: " .. tostring(err), true)
+            else execLog("Execution complete ✓", false) end
+        end
+
+        runBtn2.MouseButton1Click:Connect(executeCode)
+        clearBtn.MouseButton1Click:Connect(function() codeBox.Text = "" execLog("Cleared.", false) end)
+        resetBtn.MouseButton1Click:Connect(function()
+            codeBox.Text = ""
+            for _, c in pairs(execOutput:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
+            outCount = 0
+        end)
+
+        -- Also run on Ctrl+Enter (keyboard)
+        UIS2.InputBegan:Connect(function(input, gpe)
+            if gpe then return end
+            if input.KeyCode == Enum.KeyCode.Return and UIS2:IsKeyDown(Enum.KeyCode.LeftControl) then
+                executeCode()
+            end
+        end)
+
+        -- Fade-in animation
+        local eAnimConn; local eElapsed = 0
+        eAnimConn = RunService2.Heartbeat:Connect(function(dt)
+            eElapsed = eElapsed + dt
+            local t = math.min(eElapsed / 0.25, 1)
+            local e = 1 - (1-t)^3
+            pcall(function() execFrame.GroupTransparency = 1 - e end)
+            if t >= 1 then eAnimConn:Disconnect() end
+        end)
+
+        local function closeExec()
+            local ex2 = 0; local startT = execFrame.GroupTransparency
+            local exitC; exitC = RunService2.Heartbeat:Connect(function(dt)
+                ex2 = ex2 + dt
+                local t = math.min(ex2 / 0.20, 1)
+                pcall(function() execFrame.GroupTransparency = startT + (1 - startT) * (t^3) end)
+                if t >= 1 then
+                    exitC:Disconnect()
+                    luauGui:Destroy(); luauOpen = false; luauGui = nil
+                    log("[LUAU] Executor closed", "muted")
+                end
+            end)
+        end
+
+        eCloseBtn.MouseButton1Click:Connect(closeExec)
+    end
+
+    -- ── Command parser ────────────────────────────────
+    local HELP_TEXT = {
+        "┌─────────────────────────────────────┐",
+        "│        PULPI CMD  — COMMANDS         │",
+        "├─────────────────────────────────────┤",
+        "│ /gender <nb|male|female>             │",
+        "│   Set display pronouns               │",
+        "├─────────────────────────────────────┤",
+        "│ /language <en|es>                    │",
+        "│   Switch script language             │",
+        "├─────────────────────────────────────┤",
+        "│ /nds                                 │",
+        "│   Toggle NDS fly/fall damage bypass  │",
+        "├─────────────────────────────────────┤",
+        "│ /allreset                            │",
+        "│   Reset graphics, lighting & script  │",
+        "├─────────────────────────────────────┤",
+        "│ /luau                                │",
+        "│   Open/close Luau executor           │",
+        "├─────────────────────────────────────┤",
+        "│ /me                                  │",
+        "│   Show player info                   │",
+        "├─────────────────────────────────────┤",
+        "│ /ping                                │",
+        "│   Check server latency               │",
+        "├─────────────────────────────────────┤",
+        "│ /clear                               │",
+        "│   Clear the console                  │",
+        "├─────────────────────────────────────┤",
+        "│ /kill                                │",
+        "│   Kill your character                │",
+        "├─────────────────────────────────────┤",
+        "│ /respawn                             │",
+        "│   Force respawn                      │",
+        "├─────────────────────────────────────┤",
+        "│ /god                                 │",
+        "│   Max health + regen loop            │",
+        "├─────────────────────────────────────┤",
+        "│ /pos                                 │",
+        "│   Print your current position        │",
+        "├─────────────────────────────────────┤",
+        "│ /fps                                 │",
+        "│   Show current FPS                   │",
+        "├─────────────────────────────────────┤",
+        "│ /help                                │",
+        "│   Show this list                     │",
+        "└─────────────────────────────────────┘",
+    }
+
+    local godActive = false
+    local godConn   = nil
+
+    local function runCommand(raw)
+        local line = raw:match("^%s*(.-)%s*$")
+        if line == "" then return end
+
+        table.insert(cmdHistory, 1, line)
+        if #cmdHistory > 40 then table.remove(cmdHistory) end
+        histIdx = 0
+
+        log("> " .. line, "muted")
+
+        local parts = {}
+        for w in line:gmatch("%S+") do table.insert(parts, w) end
+        local cmd = (parts[1] or ""):lower()
+        local arg1 = (parts[2] or ""):lower()
+
+        -- /help
+        if cmd == "/help" then
+            for _, l in ipairs(HELP_TEXT) do log(l, "info") end
+
+        -- /gender
+        elseif cmd == "/gender" then
+            local valid = {nb=true, ["non-binary"]=true, male=true, female=true}
+            if not valid[arg1] then
+                log("Usage: /gender <nb | male | female>", "warn")
+            else
+                local mapped = (arg1 == "non-binary") and "nb" or arg1
+                cmdGender = mapped
+                log("Pronouns set to: " .. pronouns[mapped], "ok")
+            end
+
+        -- /language
+        elseif cmd == "/language" then
+            if arg1 ~= "en" and arg1 ~= "es" and arg1 ~= "english" and arg1 ~= "spanish" then
+                log("Usage: /language <en | es>", "warn")
+            else
+                local mapped = (arg1 == "english") and "en" or (arg1 == "spanish") and "es" or arg1
+                if SavedConfig then
+                    SavedConfig.Lang = mapped
+                    pcall(SaveData)
+                end
+                cmdLang = mapped
+                log("Language set to: " .. (mapped == "en" and "English" or "Español"), "ok")
+                log("Restart the script to see full effect.", "warn")
+            end
+
+        -- /nds
+        elseif cmd == "/nds" then
+            if ndsActive then
+                stopNDS()
+            else
+                startNDS()
+                log("[NDS] Velocity cap + health guard active.", "ok")
+                log("[NDS] Tip: fly in NDS without taking speed/fall damage.", "info")
+            end
+
+        -- /allreset
+        elseif cmd == "/allreset" then
+            log("Resetting graphics & lighting...", "warn")
+            pcall(function()
+                local L = game:GetService("Lighting")
+                L.Brightness        = 2
+                L.ClockTime         = 14
+                L.FogEnd            = 100000
+                L.FogStart          = 0
+                L.GlobalShadows     = true
+                L.OutdoorAmbient    = Color3.fromRGB(128, 128, 128)
+                L.Ambient           = Color3.fromRGB(0, 0, 0)
+                L.ColorShift_Bottom = Color3.fromRGB(0, 0, 0)
+                L.ColorShift_Top    = Color3.fromRGB(0, 0, 0)
+                for _, fx in pairs(L:GetChildren()) do
+                    if fx.Name ~= "PULPI_BLUR" then pcall(function() fx:Destroy() end) end
+                end
+            end)
+            pcall(function()
+                settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+            end)
+            log("Lighting reset ✓", "ok")
+            log("Stopping active features...", "warn")
+            pcall(function()
+                if SavedConfig.FlyActive then manageFlight(false) end
+                if SavedConfig.NoclipActive then manageNoclip(false) end
+                if SavedConfig.ESPActive then manageESP(false) end
+                if ndsActive then stopNDS() end
+                if godActive and godConn then godConn:Disconnect(); godConn = nil; godActive = false end
+            end)
+            log("Script state reset ✓", "ok")
+            log("Use /luau to re-run any scripts.", "info")
+
+        -- /luau
+        elseif cmd == "/luau" then
+            openLuauExecutor()
+            if not luauOpen then
+            else log("[LUAU] Executor opened.", "sys") end
+
+        -- /me
+        elseif cmd == "/me" then
+            log("Player : " .. lplr.Name .. " (@" .. lplr.DisplayName .. ")", "info")
+            log("UserID : " .. lplr.UserId, "info")
+            log("Gender : " .. cmdGender .. " (" .. pronouns[cmdGender] .. ")", "info")
+            log("Lang   : " .. cmdLang, "info")
+            local char = lplr.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hum then log("Health : " .. math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth), "info") end
+                if hrp then
+                    local p = hrp.Position
+                    log(("Pos    : %.1f, %.1f, %.1f"):format(p.X, p.Y, p.Z), "info")
+                end
+            end
+            log("NDS    : " .. (ndsActive and "ON" or "OFF"), ndsActive and "ok" or "warn")
+
+        -- /ping
+        elseif cmd == "/ping" then
+            local ok2, ms = pcall(function() return math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()) end)
+            if ok2 then log("Ping: " .. ms .. " ms", ms < 100 and "ok" or ms < 200 and "warn" or "err")
+            else log("Ping: unavailable in this executor", "warn") end
+
+        -- /clear
+        elseif cmd == "/clear" then
+            for _, c in pairs(logFrame:GetChildren()) do
+                if c:IsA("TextLabel") then c:Destroy() end
+            end
+            logCount = 0
+            log("Console cleared.", "muted")
+
+        -- /kill
+        elseif cmd == "/kill" then
+            pcall(function()
+                local hum = lplr.Character:FindFirstChildOfClass("Humanoid")
+                if hum then hum.Health = 0 end
+            end)
+            log("Character killed.", "err")
+
+        -- /respawn
+        elseif cmd == "/respawn" then
+            pcall(function() lplr:LoadCharacter() end)
+            log("Respawning...", "warn")
+
+        -- /god
+        elseif cmd == "/god" then
+            if godActive then
+                if godConn then godConn:Disconnect(); godConn = nil end
+                godActive = false
+                log("God mode OFF.", "warn")
+            else
+                godActive = true
+                godConn = RunService2.Heartbeat:Connect(function()
+                    pcall(function()
+                        local hum = lplr.Character and lplr.Character:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            hum.MaxHealth = 1e6
+                            if hum.Health < 1e6 then hum.Health = 1e6 end
+                        end
+                    end)
+                end)
+                log("God mode ON — health locked at 1,000,000.", "ok")
+            end
+
+        -- /pos
+        elseif cmd == "/pos" then
+            pcall(function()
+                local hrp = lplr.Character.HumanoidRootPart
+                local p = hrp.Position
+                log(("X: %.2f  Y: %.2f  Z: %.2f"):format(p.X, p.Y, p.Z), "info")
+            end)
+
+        -- /fps
+        elseif cmd == "/fps" then
+            local fps = math.floor(1 / RunService2.Heartbeat:Wait())
+            log("FPS: ~" .. fps, fps >= 55 and "ok" or fps >= 30 and "warn" or "err")
+
+        else
+            log("Unknown command: " .. cmd .. "  (try /help)", "err")
+        end
+    end
+
+    -- ── Input wiring ──────────────────────────────────
+    local function submitInput()
+        local txt = inputBox.Text:match("^%s*(.-)%s*$")
+        inputBox.Text = ""
+        runCommand(txt)
+    end
+
+    runBtn.MouseButton1Click:Connect(submitInput)
+
+    inputBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then submitInput() end
+    end)
+
+    -- Up/Down arrow key history
+    UIS2.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if not cmdVisible then return end
+        if input.KeyCode == Enum.KeyCode.Up then
+            histIdx = math.min(histIdx + 1, #cmdHistory)
+            inputBox.Text = cmdHistory[histIdx] or ""
+        elseif input.KeyCode == Enum.KeyCode.Down then
+            histIdx = math.max(histIdx - 1, 0)
+            inputBox.Text = cmdHistory[histIdx] or ""
+        end
+    end)
+
+    -- Close button
+    closeBtn.MouseButton1Click:Connect(toggleCmd)
+
+    -- ── Keybind: Ctrl + ` (backtick) to toggle CMD ────
+    UIS2.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.BackQuote and UIS2:IsKeyDown(Enum.KeyCode.LeftControl) then
+            toggleCmd()
+        end
+    end)
+
+    -- ── Welcome message ───────────────────────────────
+    log("┌─────────────────────────────┐", "sys")
+    log("│   PULPI CMD  v1.0  ready    │", "sys")
+    log("└─────────────────────────────┘", "sys")
+    log("Type /help for a list of commands.", "info")
+    log("Keybind: Ctrl + ` to open/close", "muted")
+
+    -- ── Add CMD toggle button to main GUI ─────────────
+    -- Wait for mainLayer to exist
+    task.spawn(function()
+        task.wait(1.5)
+        -- Try to inject a CMD button into the main menu
+        pcall(function()
+            -- Find the scroll frame of PULPI main menu
+            local mainSGui = gui2parent:FindFirstChild("PULPI_GUI_V13_5")
+            if mainSGui then
+                local mb = mainSGui:FindFirstChildOfClass("CanvasGroup") or mainSGui:FindFirstChildOfClass("Frame")
+                if mb then
+                    local sc = mb:FindFirstChildOfClass("ScrollingFrame")
+                    if sc then
+                        -- Find extras section or append button at bottom
+                        local cmdMenuBtn = Instance.new("TextButton")
+                        cmdMenuBtn.Size             = isMobile and UDim2.new(0.92, 0, 0, 48) or UDim2.new(0.85, 0, 0.07, 0)
+                        cmdMenuBtn.BackgroundColor3 = Color3.fromRGB(20, 60, 30)
+                        cmdMenuBtn.Text             = "🖥  CMD TERMINAL"
+                        cmdMenuBtn.TextColor3       = Color3.fromRGB(80, 230, 120)
+                        cmdMenuBtn.TextScaled       = true
+                        cmdMenuBtn.Font             = Enum.Font.Code
+                        Instance.new("UICorner", cmdMenuBtn).CornerRadius = UDim.new(0, 10)
+                        Instance.new("UIStroke", cmdMenuBtn).Color = Color3.fromRGB(40, 160, 80)
+                        cmdMenuBtn.LayoutOrder      = 9999
+                        cmdMenuBtn.Parent           = sc
+                        cmdMenuBtn.MouseButton1Click:Connect(toggleCmd)
+                    end
+                end
+            end
+        end)
+    end)
+
+    -- Also bind Ctrl+T as an alternative
+    UIS2.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.T and UIS2:IsKeyDown(Enum.KeyCode.LeftControl) then
+            toggleCmd()
+        end
+    end)
+end)
+
