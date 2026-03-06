@@ -635,10 +635,11 @@ if not getgenv().Network then
         LocalPlayer.ReplicationFocus = Workspace
         local _networkCleanupTimer = 0
         RunService.Heartbeat:Connect(function(dt)
-            -- ★ FIX: Limpiar partes muertas periódicamente (cada 15s) para el bug 60→12 FPS
+            -- ★ FIX: Limpiar partes muertas cada 10s (antes 15s) y no setear SimulationRadius cada frame
             _networkCleanupTimer = _networkCleanupTimer + dt
-            if _networkCleanupTimer >= 15 then
+            if _networkCleanupTimer >= 10 then
                 _networkCleanupTimer = 0
+                pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
                 local parts = getgenv().Network.BaseParts
                 for i = #parts, 1, -1 do
                     local p = parts[i]
@@ -647,8 +648,6 @@ if not getgenv().Network then
                     end
                 end
             end
-
-            pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
             local parts = getgenv().Network.BaseParts
             local vel = getgenv().Network.Velocity
             -- ★ FIX: Iterar en reverse para safe-remove de partes muertas on-the-fly
@@ -737,8 +736,8 @@ end)
 
 -- ★ FIX RING: Throttle con acumulador de tiempo + culling de distancia
 local _ringDt = 0
-local _ringInterval = 1/30  -- actualizar ring a 30fps en vez de 60fps
-local _ringMaxRadius = 120  -- no procesar partes a más de 2x el radio máximo
+local _ringInterval = 1/20  -- bajado a 20fps para hardware débil (i3-N300)
+local _RING_MAX_PER_TICK = 200  -- máximo de partes procesadas por tick
 
 RunService.Heartbeat:Connect(function(dt)
     if not ringPartsEnabled then return end
@@ -751,9 +750,13 @@ RunService.Heartbeat:Connect(function(dt)
 
     local tornadoCenter = humanoidRootPart.Position
     local ringRadius    = SavedConfig.RingRadius
-    local cullRadius    = _ringMaxRadius * _ringMaxRadius  -- comparar distancia^2 sin sqrt
+    -- ★ FIX: el cull usa el radio REAL del ring (no un cap hardcodeado de 120)
+    local cullDist      = math.max(150, ringRadius * 2.2)
+    local cullRadius    = cullDist * cullDist  -- comparar distancia^2 sin sqrt
 
+    local processed = 0
     for i = #partsRing, 1, -1 do
+        if processed >= _RING_MAX_PER_TICK then break end
         local part = partsRing[i]
         if not part or not part.Parent then
             table.remove(partsRing, i)
@@ -761,11 +764,11 @@ RunService.Heartbeat:Connect(function(dt)
             pcall(function()
                 if not part.Anchored then
                     local pos = part.Position
-                    -- ★ Cull: ignorar partes muy lejos para ahorrar cálculos
                     local dx = pos.X - tornadoCenter.X
                     local dz = pos.Z - tornadoCenter.Z
                     if (dx*dx + dz*dz) > cullRadius then return end
 
+                    processed = processed + 1
                     local distance = math.sqrt(dx*dx + dz*dz)
                     local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
                     local newAngle = angle + math.rad(rotationSpeed)
@@ -836,21 +839,59 @@ local function toggleHeadlessFE(forceState)
     if not char then return end
     local head = char:FindFirstChild("Head")
     if not head then return end
+
     if SavedConfig.HeadlessActive then
         pcall(function()
-            if head:FindFirstChildOfClass("SpecialMesh") then
-                headlessCache.MeshScale = head:FindFirstChildOfClass("SpecialMesh").Scale
-                head:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
+            -- ★ R6/R15 clásico: escalar SpecialMesh a 0
+            local mesh = head:FindFirstChildOfClass("SpecialMesh")
+            if mesh then
+                headlessCache.MeshScale = mesh.Scale
+                mesh.Scale = Vector3.new(0, 0, 0)
             end
-            if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 1 end
+            -- ★ R15 moderno: poner transparencia = 1 directamente en el Part
+            headlessCache.HeadTransp = head.Transparency
+            head.Transparency = 1
+            -- Ocultar Decals/Textures (cara del avatar)
+            for _, d in pairs(head:GetChildren()) do
+                if d:IsA("Decal") or d:IsA("Texture") then
+                    headlessCache["decal_"..d.Name] = d.Transparency
+                    d.Transparency = 1
+                end
+            end
+            -- Ocultar TODOS los accesorios de la zona de la cabeza
             for _, acc in pairs(char:GetChildren()) do
                 if acc:IsA("Accessory") then
                     local hnd = acc:FindFirstChild("Handle")
-                    if hnd and hnd:FindFirstChildOfClass("SpecialMesh") then
-                        local att = hnd:FindFirstChildOfClass("Attachment")
-                        if att and (string.find(att.Name, "Hat") or string.find(att.Name, "Hair") or string.find(att.Name, "Face")) then
-                            headlessCache[acc.Name] = hnd:FindFirstChildOfClass("SpecialMesh").Scale
-                            hnd:FindFirstChildOfClass("SpecialMesh").Scale = Vector3.new(0,0,0)
+                    if hnd then
+                        -- Detectar si el accesorio va en la cabeza:
+                        -- método 1: nombre del attachment
+                        local isHead = false
+                        for _, att in pairs(hnd:GetChildren()) do
+                            if att:IsA("Attachment") then
+                                local n = att.Name:lower()
+                                if n:find("hat") or n:find("hair") or n:find("face")
+                                or n:find("head") or n:find("eyebrow") or n:find("nose")
+                                or n:find("ear") then
+                                    isHead = true; break
+                                end
+                            end
+                        end
+                        -- método 2: si la cabeza tiene un Attachment con el mismo nombre
+                        if not isHead then
+                            for _, att in pairs(hnd:GetChildren()) do
+                                if att:IsA("Attachment") and head:FindFirstChild(att.Name) then
+                                    isHead = true; break
+                                end
+                            end
+                        end
+                        if isHead then
+                            local m = hnd:FindFirstChildOfClass("SpecialMesh")
+                            if m then
+                                headlessCache[acc.Name.."_mesh"] = m.Scale
+                                m.Scale = Vector3.new(0, 0, 0)
+                            end
+                            headlessCache[acc.Name.."_tp"] = hnd.Transparency
+                            hnd.Transparency = 1
                         end
                     end
                 end
@@ -858,18 +899,39 @@ local function toggleHeadlessFE(forceState)
         end)
     else
         pcall(function()
-            if head:FindFirstChildOfClass("SpecialMesh") and headlessCache.MeshScale then
-                head:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache.MeshScale
+            -- Restaurar SpecialMesh
+            local mesh = head:FindFirstChildOfClass("SpecialMesh")
+            if mesh and headlessCache.MeshScale then
+                mesh.Scale = headlessCache.MeshScale
             end
-            if head:FindFirstChildOfClass("Decal") then head:FindFirstChildOfClass("Decal").Transparency = 0 end
+            -- Restaurar transparencia del Head
+            if headlessCache.HeadTransp ~= nil then
+                head.Transparency = headlessCache.HeadTransp
+            end
+            -- Restaurar Decals/Textures
+            for _, d in pairs(head:GetChildren()) do
+                if d:IsA("Decal") or d:IsA("Texture") then
+                    local cached = headlessCache["decal_"..d.Name]
+                    d.Transparency = (cached ~= nil) and cached or 0
+                end
+            end
+            -- Restaurar accesorios
             for _, acc in pairs(char:GetChildren()) do
                 if acc:IsA("Accessory") then
                     local hnd = acc:FindFirstChild("Handle")
-                    if hnd and hnd:FindFirstChildOfClass("SpecialMesh") and headlessCache[acc.Name] then
-                        hnd:FindFirstChildOfClass("SpecialMesh").Scale = headlessCache[acc.Name]
+                    if hnd then
+                        local m = hnd:FindFirstChildOfClass("SpecialMesh")
+                        if m and headlessCache[acc.Name.."_mesh"] then
+                            m.Scale = headlessCache[acc.Name.."_mesh"]
+                        end
+                        if headlessCache[acc.Name.."_tp"] ~= nil then
+                            hnd.Transparency = headlessCache[acc.Name.."_tp"]
+                        end
                     end
                 end
             end
+            -- Limpiar cache para que el próximo toggle sea limpio
+            headlessCache = {}
         end)
     end
 end
@@ -2323,7 +2385,13 @@ local function buildAndOrchestrate()
         fill.BackgroundColor3 = Color3.fromRGB(150, 180, 255)
         fill.Size = UDim2.fromScale((start - min) / (max - min), 1)
         Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+        -- ★ FIX SLIDER LEAK: conexiones UIS creadas SOLO mientras se arrastra,
+        --   liberadas inmediatamente al soltar. Antes eran permanentes (×5 sliders = 10
+        --   listeners globales disparándose en cada movimiento de mouse → caída de FPS).
         local dragging = false
+        local _sliderMoveConn = nil
+        local _sliderEndConn  = nil
+
         local function processInput(inputObj)
             local rawX = (inputObj.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
             local clampedX = math.clamp(rawX, 0, 1)
@@ -2334,20 +2402,28 @@ local function buildAndOrchestrate()
             callback(finalVal)
             SaveData()
         end
+
+        local function disconnectSlider()
+            if _sliderMoveConn then _sliderMoveConn:Disconnect(); _sliderMoveConn = nil end
+            if _sliderEndConn  then _sliderEndConn:Disconnect();  _sliderEndConn  = nil end
+            dragging = false
+        end
+
         track.InputBegan:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
                 dragging = true
                 processInput(i)
-            end
-        end)
-        UIS.InputChanged:Connect(function(i)
-            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-                processInput(i)
-            end
-        end)
-        UIS.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
+                -- Conectar SOLO ahora que se está arrastrando
+                _sliderMoveConn = UIS.InputChanged:Connect(function(i2)
+                    if dragging and (i2.UserInputType == Enum.UserInputType.MouseMovement or i2.UserInputType == Enum.UserInputType.Touch) then
+                        processInput(i2)
+                    end
+                end)
+                _sliderEndConn = UIS.InputEnded:Connect(function(i2)
+                    if i2.UserInputType == Enum.UserInputType.MouseButton1 or i2.UserInputType == Enum.UserInputType.Touch then
+                        disconnectSlider()
+                    end
+                end)
             end
         end)
         label.FocusLost:Connect(function()
@@ -7715,9 +7791,13 @@ task.spawn(function()
 
         -- /luau
         elseif cmd == "/luau" then
+            local wasOpen = luauOpen
             openLuauExecutor()
-            if not luauOpen then
-            else log("[LUAU] Executor opened.", "sys") end
+            if wasOpen then
+                log("[LUAU] Executor closed.", "muted")
+            else
+                log("[LUAU] Executor opened.", "sys")
+            end
 
         -- /me
         elseif cmd == "/me" then
@@ -7857,4 +7937,3 @@ task.spawn(function()
         end
     end)
 end)
-
