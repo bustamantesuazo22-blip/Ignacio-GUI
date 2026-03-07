@@ -427,10 +427,12 @@ if game.PlaceId == 189707 then
                 local model = part:FindFirstAncestorOfClass("Model")
                 if not (model and _charModels[model]) then
                     -- Solidificar: anclada Y con colisión
+                if not _G.PULPI_partsToolActive then
                     pcall(function()
                         part.Anchored   = true
                         part.CanCollide = true
                     end)
+                end
                 end
             end
         end
@@ -786,6 +788,232 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
+-- ==========================================
+-- [ PARTS TOOL - MOVER PIEZAS CON CÁMARA ]
+-- Usa misma mecánica que el ring:
+-- AlignPosition + Attachment + ghostAnchor invisible
+-- LClick = agarrar  |  RClick = soltar/tirar
+-- ==========================================
+_G.PULPI_partsToolActive = false
+local _partsGuiRef = nil
+
+local function openPartsTool(logFn)
+    -- Toggle: si ya está abierta, cerrar
+    if _partsGuiRef and _partsGuiRef.Parent then
+        _partsGuiRef:Destroy()
+        return
+    end
+
+    _G.PULPI_partsToolActive = true
+
+    local partsGui = Instance.new("ScreenGui", targetParent)
+    partsGui.Name = "PULPI_PARTS_TOOL"
+    partsGui.IgnoreGuiInset = true
+    partsGui.DisplayOrder = 800
+    _partsGuiRef = partsGui
+
+    -- Panel principal
+    local panel = Instance.new("Frame", partsGui)
+    panel.Size = isMobile and UDim2.fromScale(0.58, 0.13) or UDim2.fromScale(0.26, 0.10)
+    panel.Position = UDim2.fromScale(0.5, 0.02)
+    panel.AnchorPoint = Vector2.new(0.5, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(14, 12, 22)
+    panel.BackgroundTransparency = 0.08
+    panel.Active = true
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+    local panelStroke = Instance.new("UIStroke", panel)
+    panelStroke.Color = Color3.fromRGB(130, 80, 255)
+    panelStroke.Thickness = 2
+    makeDraggable(panel)
+
+    local titleLbl = Instance.new("TextLabel", panel)
+    titleLbl.Size = UDim2.new(1, -42, 0.5, 0)
+    titleLbl.Position = UDim2.fromOffset(10, 2)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = "🧱 PARTS TOOL"
+    titleLbl.TextColor3 = Color3.fromRGB(180, 130, 255)
+    titleLbl.Font = Enum.Font.GothamBlack
+    titleLbl.TextScaled = true
+
+    local statusLbl = Instance.new("TextLabel", panel)
+    statusLbl.Size = UDim2.new(1, -42, 0.45, 0)
+    statusLbl.Position = UDim2.new(0, 10, 0.52, 0)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text = "LClick: agarrar  |  RClick: soltar"
+    statusLbl.TextColor3 = Color3.fromRGB(160, 160, 160)
+    statusLbl.Font = Enum.Font.Gotham
+    statusLbl.TextScaled = true
+
+    local closeBtn = Instance.new("TextButton", panel)
+    closeBtn.Size = UDim2.fromOffset(28, 28)
+    closeBtn.Position = UDim2.new(1, -34, 0.5, -14)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.new(1,1,1)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextScaled = true
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+
+    -- Crosshair púrpura (distinto al del fling que es blanco)
+    local crossParts = Instance.new("Frame", partsGui)
+    crossParts.Size = UDim2.fromOffset(10, 10)
+    crossParts.Position = UDim2.fromScale(0.5, 0.5)
+    crossParts.AnchorPoint = Vector2.new(0.5, 0.5)
+    crossParts.BackgroundColor3 = Color3.fromRGB(150, 80, 255)
+    Instance.new("UICorner", crossParts).CornerRadius = UDim.new(1, 0)
+
+    -- Estado interno
+    local grabbedPart    = nil
+    local savedAnchored  = false
+    local savedCollide   = true
+    local savedCanTouch  = true
+    local ghostAnchor    = nil
+    local alignPos       = nil
+    local partAtt        = nil
+    local ghostAtt       = nil
+    local renderConn     = nil
+    local GRAB_DIST      = 18   -- studs frente a la cámara
+    local MIN_PLAYER_DIST = 4  -- nunca más cerca que esto del personaje
+
+    local function releasePart()
+        if renderConn then renderConn:Disconnect(); renderConn = nil end
+        if grabbedPart and grabbedPart.Parent then
+            pcall(function()
+                if partAtt  and partAtt.Parent  then partAtt:Destroy()  end
+                if alignPos and alignPos.Parent then alignPos:Destroy() end
+                -- ★ Restaurar estado original incluyendo CanTouch
+                grabbedPart.Anchored   = savedAnchored
+                grabbedPart.CanCollide = savedCollide
+                pcall(function() grabbedPart.CanTouch = savedCanTouch end)
+                if not savedAnchored then
+                    grabbedPart.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.3, 0.5, 0, 0)
+                end
+            end)
+        end
+        if ghostAnchor and ghostAnchor.Parent then ghostAnchor:Destroy() end
+        grabbedPart = nil; ghostAnchor = nil; alignPos = nil; partAtt = nil; ghostAtt = nil
+        statusLbl.Text = "LClick: agarrar  |  RClick: soltar"
+        statusLbl.TextColor3 = Color3.fromRGB(160, 160, 160)
+        crossParts.BackgroundColor3 = Color3.fromRGB(150, 80, 255)
+    end
+
+    local function grabPart()
+        releasePart()
+        local cx = cam.ViewportSize.X / 2
+        local cy = cam.ViewportSize.Y / 2
+        local ray = cam:ViewportPointToRay(cx, cy)
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {player.Character, cam, partsGui}
+        params.FilterType = Enum.RaycastFilterType.Blacklist
+        local hit = Workspace:Raycast(ray.Origin, ray.Direction * 400, params)
+        if not hit or not hit.Instance then
+            statusLbl.Text = "⚠ Nada bajo el cursor"
+            statusLbl.TextColor3 = Color3.fromRGB(255, 180, 60)
+            return
+        end
+        local part = hit.Instance
+        if not part:IsA("BasePart") then return end
+        local model = part:FindFirstAncestorOfClass("Model")
+        if model and model:FindFirstChildOfClass("Humanoid") then
+            statusLbl.Text = "⚠ No se puede agarrar un personaje"
+            statusLbl.TextColor3 = Color3.fromRGB(255, 80, 80)
+            return
+        end
+
+        savedAnchored = part.Anchored
+        savedCollide  = part.CanCollide
+        pcall(function() savedCanTouch = part.CanTouch end)
+
+        grabbedPart = part
+        pcall(function()
+            for _, x in pairs(part:GetChildren()) do
+                if x:IsA("BodyVelocity") or x:IsA("BodyPosition") or
+                   x:IsA("BodyGyro") or x:IsA("AlignPosition") then x:Destroy() end
+            end
+            part.Anchored   = false
+            part.CanCollide = false
+            -- ★ FIX DAÑO: CanTouch = false → scripts de daño Touched no se disparan
+            pcall(function() part.CanTouch = false end)
+            part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+        end)
+
+        ghostAnchor = Instance.new("Part", Workspace)
+        ghostAnchor.Name        = "PULPI_PARTS_GHOST"
+        ghostAnchor.Anchored    = true
+        ghostAnchor.CanCollide  = false
+        ghostAnchor.Transparency = 1
+        ghostAnchor.Size        = Vector3.new(1, 1, 1)
+        ghostAnchor.CFrame      = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector * GRAB_DIST)
+        ghostAtt = Instance.new("Attachment", ghostAnchor)
+
+        partAtt  = Instance.new("Attachment", grabbedPart)
+        alignPos = Instance.new("AlignPosition", grabbedPart)
+        alignPos.MaxForce      = 9999999999999999
+        alignPos.MaxVelocity   = math.huge
+        alignPos.Responsiveness = 200
+        alignPos.Attachment0   = partAtt
+        alignPos.Attachment1   = ghostAtt
+
+        renderConn = RunService.RenderStepped:Connect(function()
+            if not grabbedPart or not grabbedPart.Parent then releasePart(); return end
+            local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local targetPos = cam.CFrame.Position + cam.CFrame.LookVector * GRAB_DIST
+            -- ★ FIX DISTANCIA: nunca dejar la pieza dentro del personaje
+            if myRoot then
+                local toTarget = targetPos - myRoot.Position
+                if toTarget.Magnitude < MIN_PLAYER_DIST then
+                    targetPos = myRoot.Position + toTarget.Unit * MIN_PLAYER_DIST
+                end
+            end
+            ghostAnchor.CFrame = CFrame.new(targetPos)
+        end)
+
+        statusLbl.Text = "🧱 " .. part.Name .. "  — RClick p/ soltar"
+        statusLbl.TextColor3 = Color3.fromRGB(100, 255, 160)
+        crossParts.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+        if logFn then logFn("Parts: agarrado → " .. part.Name, "ok") end
+    end
+
+    -- Conexión de input
+    local inputConn = UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            grabPart()
+        elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+            if grabbedPart then
+                local nm = grabbedPart.Name
+                releasePart()
+                if logFn then logFn("Parts: soltado → " .. nm, "muted") end
+            end
+        end
+    end)
+
+    local function closeParts()
+        releasePart()
+        inputConn:Disconnect()
+        _partsGuiRef = nil
+        _G.PULPI_partsToolActive = false
+        if partsGui and partsGui.Parent then partsGui:Destroy() end
+        if logFn then logFn("Parts Tool cerrado. Anchored/NDS restaurado.", "sys") end
+    end
+
+    closeBtn.MouseButton1Click:Connect(closeParts)
+    -- Limpieza si la GUI es destruida externamente
+    partsGui.AncestryChanged:Connect(function()
+        if not partsGui.Parent then
+            releasePart()
+            pcall(function() inputConn:Disconnect() end)
+            _partsGuiRef = nil
+            _G.PULPI_partsToolActive = false
+        end
+    end)
+
+    if logFn then logFn("Parts Tool activo.  LClick=agarrar  RClick=soltar", "sys") end
+end
+
+-- Exponer para que CMD pueda llamarlo con su función log
+_G.PULPI_openPartsTool = openPartsTool
+
 local function SendChatMessage(message)
     pcall(function()
         if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
@@ -1093,10 +1321,38 @@ local huntBeam = nil
 local att0, att1 = nil, nil
 local hunting = false
 
+-- ★ HUNT RING: piezas sueltas lanzadas al target (misma mecánica que ForcePart del ring)
+local huntRingAnchor = nil   -- Part invisible anclada en el HRP del target
+local huntRingAtt    = nil   -- Attachment en ese anchor (equivalente a Attachment1Ring)
+local huntRingParts  = {}    -- {part, attPart, alignPart} lanzadas al target
+local _huntRingDt    = 0
+local _huntRingInterval = 1/15  -- 15fps igual que el ring
+local _HUNT_RING_MAX = 40        -- max piezas simultáneas hacia el target
+
+local function _cleanHuntRing()
+    for _, entry in ipairs(huntRingParts) do
+        pcall(function()
+            if entry.att   and entry.att.Parent   then entry.att:Destroy()   end
+            if entry.align and entry.align.Parent  then entry.align:Destroy() end
+            -- Restaurar física normal a la pieza
+            if entry.part and entry.part.Parent then
+                entry.part.CanCollide = false  -- queda en partsRing, se maneja allí
+            end
+        end)
+    end
+    huntRingParts = {}
+    if huntRingAnchor and huntRingAnchor.Parent then huntRingAnchor:Destroy() end
+    if huntRingAtt    and huntRingAtt.Parent    then huntRingAtt:Destroy()    end
+    huntRingAnchor = nil
+    huntRingAtt    = nil
+end
+
 local function stopHunt()
     hunting = false
+    _cleanHuntRing()
     if connections.hunt then connections.hunt:Disconnect() connections.hunt = nil end
     if connections.huntNoclip then connections.huntNoclip:Disconnect() connections.huntNoclip = nil end
+    if connections.huntRing   then connections.huntRing:Disconnect()   connections.huntRing   = nil end
     if huntHighlight then huntHighlight:Destroy() huntHighlight = nil end
     if huntBeam then huntBeam:Destroy() huntBeam = nil end
     if att0 then att0:Destroy() att0 = nil end
@@ -1175,6 +1431,99 @@ local function startHunt(targetPlayer)
     huntBeam.Attachment0 = att0
     pcall(function() hrp.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0)) end)
     task.wait(0.05)
+    -- ★ HUNT RING: anchor invisible en el HRP del target
+    huntRingAnchor = Instance.new("Part", Workspace)
+    huntRingAnchor.Name        = "PULPI_HUNT_RING_ANCHOR"
+    huntRingAnchor.Anchored    = true
+    huntRingAnchor.CanCollide  = false
+    huntRingAnchor.Transparency = 1
+    huntRingAnchor.Size        = Vector3.new(1, 1, 1)
+    huntRingAtt = Instance.new("Attachment", huntRingAnchor)
+
+    -- Heartbeat del hunt ring: recluta piezas sueltas de partsRing y las lanza al target
+    -- Misma mecánica que ForcePart: AlignPosition apuntando a huntRingAtt
+    connections.huntRing = RunService.Heartbeat:Connect(function(dt)
+        if not hunting then return end
+        _huntRingDt = _huntRingDt + dt
+        if _huntRingDt < _huntRingInterval then return end
+        _huntRingDt = 0
+
+        -- Mover el anchor al HRP del target
+        local tChar2 = huntTarget and huntTarget.Character
+        local tHrp2  = tChar2 and tChar2:FindFirstChild("HumanoidRootPart")
+        if not tHrp2 then return end
+        pcall(function() huntRingAnchor.CFrame = tHrp2.CFrame end)
+
+        -- Limpiar piezas ya destruidas del registro
+        for i = #huntRingParts, 1, -1 do
+            local e = huntRingParts[i]
+            if not e.part or not e.part.Parent then
+                pcall(function()
+                    if e.att   and e.att.Parent   then e.att:Destroy()   end
+                    if e.align and e.align.Parent  then e.align:Destroy() end
+                end)
+                table.remove(huntRingParts, i)
+            end
+        end
+
+        -- Si ya tenemos suficientes piezas lanzadas, no reclutar más
+        if #huntRingParts >= _HUNT_RING_MAX then return end
+
+        -- Índice para llevar cuenta de dónde estamos en partsRing sin resetear cada frame
+        local needed = _HUNT_RING_MAX - #huntRingParts
+        local added  = 0
+
+        -- Conjunto rápido de piezas ya reclutadas (evitar duplicados)
+        local alreadyIn = {}
+        for _, e in ipairs(huntRingParts) do
+            if e.part then alreadyIn[e.part] = true end
+        end
+
+        local tPos = tHrp2.Position
+        for i = #partsRing, 1, -1 do
+            if added >= needed then break end
+            local p = partsRing[i]
+            if p and p.Parent and not p.Anchored and not alreadyIn[p] then
+                -- Solo reclutar piezas dentro de 200 studs del target
+                local d = (p.Position - tPos).Magnitude
+                if d < 200 then
+                    pcall(function()
+                        -- Limpiar fuerzas previas (igual que ForcePart)
+                        for _, x in pairs(p:GetChildren()) do
+                            if x:IsA("BodyAngularVelocity") or x:IsA("BodyForce") or
+                               x:IsA("BodyGyro") or x:IsA("BodyPosition") or
+                               x:IsA("BodyThrust") or x:IsA("BodyVelocity") or
+                               x:IsA("RocketPropulsion") or x:IsA("AlignPosition") then
+                                x:Destroy()
+                            end
+                        end
+                        -- Limpiar attachments propios de ring previos
+                        for _, x in pairs(p:GetChildren()) do
+                            if x:IsA("Attachment") then x:Destroy() end
+                        end
+                        p.CanCollide = false
+                        p.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+                        -- Torque para que gire (como ForcePart)
+                        local torq = Instance.new("Torque", p)
+                        torq.Torque = Vector3.new(100000, 100000, 100000)
+                        local attP = Instance.new("Attachment", p)
+                        torq.Attachment0 = attP
+                        -- AlignPosition apuntando al anchor del target
+                        local alP = Instance.new("AlignPosition", p)
+                        alP.MaxForce      = 9999999999999999
+                        alP.MaxVelocity   = math.huge
+                        alP.Responsiveness = 200
+                        alP.Attachment0   = attP
+                        alP.Attachment1   = huntRingAtt
+                        table.insert(huntRingParts, {part=p, att=attP, align=alP, torque=torq})
+                        alreadyIn[p] = true
+                        added = added + 1
+                    end)
+                end
+            end
+        end
+    end)
+
     connections.hunt = RunService.Heartbeat:Connect(function(dt)
         if not hunting then return end
         if not huntTarget or not huntTarget.Parent then
@@ -7652,6 +8001,11 @@ task.spawn(function()
         "│ /force                               │",
         "│   Anchored+CanCollide=true a todo    │",
         "│   el workspace (1 sola vez)          │",
+        "│   (Error si /parts está activo)      │",
+        "├─────────────────────────────────────┤",
+        "│ /parts                               │",
+        "│   GUI para mover piezas sueltas      │",
+        "│   LClick=agarrar  RClick=soltar      │",
         "├─────────────────────────────────────┤",
         "│ /help                                │",
         "│   Show this list                     │",
@@ -7839,40 +8193,52 @@ task.spawn(function()
 
         -- /force
         elseif cmd == "/force" then
-            log("Forzando Anchored + CanCollide en todo el workspace...", "warn")
-            task.spawn(function()
-                -- Set de personajes para excluirlos
-                local _chars = {}
-                for _, p in pairs(game:GetService("Players"):GetPlayers()) do
-                    if p.Character then _chars[p.Character] = true end
-                end
-                local count  = 0
-                local skipped = 0
-                local all    = Workspace:GetDescendants()
-                local BATCH  = 100
-                for i = 1, #all, BATCH do
-                    for j = i, math.min(i + BATCH - 1, #all) do
-                        local obj = all[j]
-                        if obj:IsA("BasePart") and obj.Parent then
-                            local model = obj:FindFirstAncestorOfClass("Model")
-                            if model and _chars[model] then
-                                skipped = skipped + 1
-                            else
-                                pcall(function()
-                                    obj.Anchored   = true
-                                    obj.CanCollide = true
-                                end)
-                                count = count + 1
+            -- ★ Guard: no correr mientras parts tool tiene una pieza sin anchored
+            if _G.PULPI_partsToolActive then
+                log("❌ Error: /parts está activo. Suelta la pieza y cierra Parts Tool primero.", "err")
+            else
+                log("Forzando Anchored + CanCollide en todo el workspace...", "warn")
+                task.spawn(function()
+                    local _chars = {}
+                    for _, p in pairs(game:GetService("Players"):GetPlayers()) do
+                        if p.Character then _chars[p.Character] = true end
+                    end
+                    local count  = 0
+                    local skipped = 0
+                    local all    = Workspace:GetDescendants()
+                    local BATCH  = 100
+                    for i = 1, #all, BATCH do
+                        for j = i, math.min(i + BATCH - 1, #all) do
+                            local obj = all[j]
+                            if obj:IsA("BasePart") and obj.Parent then
+                                local model = obj:FindFirstAncestorOfClass("Model")
+                                if model and _chars[model] then
+                                    skipped = skipped + 1
+                                else
+                                    pcall(function()
+                                        obj.Anchored   = true
+                                        obj.CanCollide = true
+                                    end)
+                                    count = count + 1
+                                end
                             end
                         end
+                        task.wait()
                     end
-                    task.wait()  -- yield para no congelar el frame
-                end
-                log("✓ Anchored + CanCollide aplicado a " .. count .. " partes.", "ok")
-                if skipped > 0 then
-                    log("  Saltadas " .. skipped .. " partes de personajes.", "muted")
-                end
-            end)
+                    log("✓ Anchored + CanCollide aplicado a " .. count .. " partes.", "ok")
+                    if skipped > 0 then
+                        log("  Saltadas " .. skipped .. " partes de personajes.", "muted")
+                    end
+                end)
+            end
+
+        -- /parts
+        elseif cmd == "/parts" then
+            if typeof(_G.PULPI_openPartsTool) == "function" then
+                _G.PULPI_openPartsTool(log)
+            else
+                log("Parts Tool no disponible aún, espera un momento.", "warn")
+            end
 
         else
             log("Unknown command: " .. cmd .. "  (try /help)", "err")
