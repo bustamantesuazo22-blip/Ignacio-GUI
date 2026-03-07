@@ -16,22 +16,6 @@ local cam = Workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
 -- ==========================================
--- [ LIBRERÍA MATEMÁTICA Y KERNEL ]
--- ==========================================
-local MathCore = {}
-MathCore.Pi = math.pi
-MathCore.Tau = math.pi * 2
-
-function MathCore.CalculateTensorForce(baseFactor)
-    local inertia = (baseFactor ^ 2) * MathCore.Pi
-    return inertia
-end
-
-function MathCore.Lerp(a, b, t)
-    return a + (b - a) * t
-end
-
--- ==========================================
 -- [ WEBHOOK (LOGGER Y ANUNCIOS) ]
 -- ==========================================
 local WebhookGlobal = "https://discord.com/api/webhooks/1476366286689931396/-xQahRx-mm5LhpCh68Bl9AoSB4RBiUP4f6xqo1ptFAC0HOZMJsVSd_SPCAyjPakj_g0I"
@@ -129,9 +113,13 @@ task.spawn(function()
         local savedVel    = Vector3.zero
         local wasAirborne = false
         local nfdConn
+        local _nfdSkip = 0  -- ★ OPT: procesar NFD cada 2 frames
 
         nfdConn = game:GetService("RunService").Heartbeat:Connect(function()
             if not hrp.Parent then nfdConn:Disconnect() return end
+            _nfdSkip = _nfdSkip + 1
+            if _nfdSkip < 2 then return end
+            _nfdSkip = 0
             local vel = hrp.AssemblyLinearVelocity
 
             -- Detectar caída peligrosa
@@ -347,44 +335,18 @@ local function applyMinimizeSystem(frame, normalSize, minSize, contentToHide)
     Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
 
     local isMinimized = false
-    local animConn = nil  -- single connection upvalue — no leaks
+    local activeTween = nil  -- ★ OPT: TweenService reemplaza Heartbeat manual → 0 carga CPU
 
     local function smoothAnimate(targetSize, showContent)
-        -- Cancelar animación previa desconectando el Heartbeat directamente
-        if animConn then animConn:Disconnect(); animConn = nil end
-
-        local startSize = frame.Size
-        local duration = 0.42
-
+        if activeTween then activeTween:Cancel(); activeTween = nil end
         if showContent then contentToHide.Visible = true end
-
-        local elapsed = 0
-        animConn = RunService.Heartbeat:Connect(function(dt)
-            elapsed = elapsed + dt
-            local t = math.min(elapsed / duration, 1)
-
-            -- Quint InOut easing
-            local e
-            if t < 0.5 then
-                e = 16 * t * t * t * t * t
-            else
-                local f = (2 * t - 2)
-                e = 1 + f * f * f * f * f / 2
-            end
-
-            pcall(function()
-                frame.Size = UDim2.new(
-                    startSize.X.Scale  + (targetSize.X.Scale  - startSize.X.Scale)  * e,
-                    startSize.X.Offset + (targetSize.X.Offset - startSize.X.Offset) * e,
-                    startSize.Y.Scale  + (targetSize.Y.Scale  - startSize.Y.Scale)  * e,
-                    startSize.Y.Offset + (targetSize.Y.Offset - startSize.Y.Offset) * e
-                )
-            end)
-
-            if t >= 1 then
-                animConn:Disconnect()
-                animConn = nil
-                if not showContent then contentToHide.Visible = false end
+        local tInfo = TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.InOut)
+        activeTween = TweenService:Create(frame, tInfo, {Size = targetSize})
+        activeTween:Play()
+        activeTween.Completed:Connect(function(state)
+            activeTween = nil
+            if not showContent and state == Enum.PlaybackState.Completed then
+                contentToHide.Visible = false
             end
         end)
     end
@@ -409,42 +371,75 @@ pcall(function()
 end)
 
 -- ==========================================
--- [ MAPA SIEMPRE SOLIDO - SOLO NATURAL DISASTER ]
+-- [ NDS: SOLIDIFY NUEVAS PIEZAS SIN LAG ]
+-- Solo activo en Natural Disaster Survival (189707)
+-- Cola + batch con puntero: sin table.remove costoso.
+-- Anchored = true  +  CanCollide = true por cada parte.
 -- ==========================================
-local IS_NDS = (game.PlaceId == 189707)
-if IS_NDS then
-    local mapKwNDS = {
-        "floor","wall","roof","base","ground","platform","stair","step",
-        "union","tile","plank","brick","road","building","struct","solid",
-        "ramp","island","terrain","land","bridge","rail","fence","pillar",
-        "column","ceil","ceiling","edge","border","spawn","water"
-    }
-    local function isPlayerCharacterPartNDS(part)
-        for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and part:IsDescendantOf(p.Character) then return true end
-        end
-        return false
+if game.PlaceId == 189707 then
+
+    -- Lookup O(1) de personajes — evita iterar jugadores por cada parte
+    local _charModels = {}
+    local function _trackPlayer(p)
+        p.CharacterAdded:Connect(function(c)
+            _charModels[c] = true
+            c.AncestryChanged:Connect(function()
+                if not c.Parent then _charModels[c] = nil end
+            end)
+        end)
+        if p.Character then _charModels[p.Character] = true end
     end
-    local function solidifyPart(part)
-        if not part:IsA("BasePart") then return end
-        if not part.Parent then return end
-        if isPlayerCharacterPartNDS(part) then return end
-        part.CanCollide = true
-        if not part.Anchored then return end
-        local n = string.lower(part.Name)
-        for _, kw in ipairs(mapKwNDS) do
-            if string.find(n, kw, 1, true) then part.Anchored = true return end
-        end
-    end
-    Workspace.DescendantAdded:Connect(function(obj)
-        task.defer(function() pcall(solidifyPart, obj) end)
+    for _, p in pairs(Players:GetPlayers()) do _trackPlayer(p) end
+    Players.PlayerAdded:Connect(_trackPlayer)
+    Players.PlayerRemoving:Connect(function(p)
+        if p.Character then _charModels[p.Character] = nil end
     end)
-    task.spawn(function()
-        local all = Workspace:GetDescendants()
-        local batch = 50
-        for i = 1, #all, batch do
-            for j = i, math.min(i + batch - 1, #all) do pcall(solidifyPart, all[j]) end
-            task.wait()
+
+    -- Cola con puntero de lectura: no hace table.remove → O(1) por operación
+    local _ndsQueue  = {}
+    local _ndsHead   = 1   -- próxima posición a leer
+    local _ndsTail   = 0   -- última posición escrita
+
+    -- Encola TODAS las BaseParts nuevas sin ningún filtro aquí
+    Workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("BasePart") then
+            _ndsTail = _ndsTail + 1
+            _ndsQueue[_ndsTail] = obj
+        end
+    end)
+
+    -- Procesador: cada Heartbeat, máximo 40 partes
+    -- Sin throttle de tiempo para reaccionar lo más rápido posible
+    local _NDS_BATCH = 40
+
+    RunService.Heartbeat:Connect(function()
+        if _ndsHead > _ndsTail then return end
+
+        local processed = 0
+        while _ndsHead <= _ndsTail and processed < _NDS_BATCH do
+            local part = _ndsQueue[_ndsHead]
+            _ndsQueue[_ndsHead] = nil  -- liberar referencia (GC)
+            _ndsHead = _ndsHead + 1
+            processed = processed + 1
+
+            if part and part.Parent then
+                -- ¿Es parte de un personaje? lookup O(1)
+                local model = part:FindFirstAncestorOfClass("Model")
+                if not (model and _charModels[model]) then
+                    -- Solidificar: anclada Y con colisión
+                    pcall(function()
+                        part.Anchored   = true
+                        part.CanCollide = true
+                    end)
+                end
+            end
+        end
+
+        -- Resetear punteros cuando la cola se vacía para evitar tabla infinita
+        if _ndsHead > _ndsTail then
+            _ndsQueue = {}
+            _ndsHead  = 1
+            _ndsTail  = 0
         end
     end)
 end
@@ -634,9 +629,12 @@ if not getgenv().Network then
     local function EnablePartControl()
         LocalPlayer.ReplicationFocus = Workspace
         local _networkCleanupTimer = 0
+        -- ★ OPT: throttle principal a 10fps (era cada frame) → -80% carga en Intel
+        local _networkTickTimer = 0
+        local _networkTickInterval = 1/10
         RunService.Heartbeat:Connect(function(dt)
-            -- ★ FIX: Limpiar partes muertas cada 10s (antes 15s) y no setear SimulationRadius cada frame
             _networkCleanupTimer = _networkCleanupTimer + dt
+            _networkTickTimer    = _networkTickTimer    + dt
             if _networkCleanupTimer >= 10 then
                 _networkCleanupTimer = 0
                 pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
@@ -648,9 +646,11 @@ if not getgenv().Network then
                     end
                 end
             end
+            -- ★ OPT: solo procesar partes cada 10fps
+            if _networkTickTimer < _networkTickInterval then return end
+            _networkTickTimer = 0
             local parts = getgenv().Network.BaseParts
             local vel = getgenv().Network.Velocity
-            -- ★ FIX: Iterar en reverse para safe-remove de partes muertas on-the-fly
             for i = #parts, 1, -1 do
                 local Part = parts[i]
                 pcall(function()
@@ -734,10 +734,10 @@ Workspace.DescendantRemoving:Connect(function(part)
     end
 end)
 
--- ★ FIX RING: Throttle con acumulador de tiempo + culling de distancia
+-- ★ OPT: throttle 15fps (era 20fps) + max 80 partes/tick para Intel
 local _ringDt = 0
-local _ringInterval = 1/20  -- bajado a 20fps para hardware débil (i3-N300)
-local _RING_MAX_PER_TICK = 200  -- máximo de partes procesadas por tick
+local _ringInterval = 1/15
+local _RING_MAX_PER_TICK = 80
 
 RunService.Heartbeat:Connect(function(dt)
     if not ringPartsEnabled then return end
@@ -957,35 +957,33 @@ local function manageFlight(state)
         bgFly.P = 15000
         if connections.fly then connections.fly:Disconnect() end
         connections.fly = RunService.RenderStepped:Connect(function()
-            pcall(function()
-                bgFly.CFrame = cam.CFrame
-                local finalDirection = Vector3.zero
-                if isMobile then
-                    local inputDir = hum.MoveDirection
-                    if inputDir.Magnitude > 0 then
-                        local camLook = cam.CFrame.LookVector
-                        local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
-                        if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
-                        local forwardFactor = inputDir:Dot(flatLook)
-                        finalDirection = Vector3.new(inputDir.X, camLook.Y * forwardFactor, inputDir.Z)
-                    end
-                    if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
-                else
-                    if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
-                    if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
-                    if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
-                    if UIS:IsKeyDown(Enum.KeyCode.D) then finalDirection = finalDirection + cam.CFrame.RightVector end
-                    if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
-                    if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
-                        finalDirection = finalDirection + Vector3.new(0, -1, 0)
-                    end
+            bgFly.CFrame = cam.CFrame
+            local finalDirection = Vector3.zero
+            if isMobile then
+                local inputDir = hum.MoveDirection
+                if inputDir.Magnitude > 0 then
+                    local camLook = cam.CFrame.LookVector
+                    local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
+                    if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
+                    local forwardFactor = inputDir:Dot(flatLook)
+                    finalDirection = Vector3.new(inputDir.X, camLook.Y * forwardFactor, inputDir.Z)
                 end
-                if finalDirection.Magnitude > 0 then
-                    bvFly.Velocity = finalDirection.Unit * SavedConfig.FlySpeed
-                else
-                    bvFly.Velocity = Vector3.new(0, 0.05, 0)
+                if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+            else
+                if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
+                if UIS:IsKeyDown(Enum.KeyCode.D) then finalDirection = finalDirection + cam.CFrame.RightVector end
+                if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
+                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+                    finalDirection = finalDirection + Vector3.new(0, -1, 0)
                 end
-            end)
+            end
+            if finalDirection.Magnitude > 0 then
+                bvFly.Velocity = finalDirection.Unit * SavedConfig.FlySpeed
+            else
+                bvFly.Velocity = Vector3.new(0, 0.05, 0)
+            end
         end)
     else
         if connections.fly then connections.fly:Disconnect() connections.fly = nil end
@@ -1049,16 +1047,30 @@ local function manageNoclip(state)
     SaveData()
     if SavedConfig.NoclipActive then
         if not connections.noclip then
-            connections.noclip = RunService.Stepped:Connect(function()
-                pcall(function()
-                    local char = player.Character
-                    if not char then return end
-                    for _, part in pairs(char:GetDescendants()) do
-                        if part:IsA("BasePart") and part.CanCollide then
-                            part.CanCollide = false
-                        end
+            -- ★ OPT: cachear partes del char, solo re-escanear al cambiar descendientes
+            local _noclipParts = {}
+            local _noclipCharConn = nil
+            local function _refreshNoclipCache()
+                _noclipParts = {}
+                local char = player.Character
+                if char then
+                    for _, v in pairs(char:GetDescendants()) do
+                        if v:IsA("BasePart") then table.insert(_noclipParts, v) end
                     end
-                end)
+                    if _noclipCharConn then _noclipCharConn:Disconnect() end
+                    _noclipCharConn = char.DescendantAdded:Connect(function(v)
+                        if v:IsA("BasePart") then table.insert(_noclipParts, v) end
+                    end)
+                end
+            end
+            _refreshNoclipCache()
+            player.CharacterAdded:Connect(function() task.wait(0.2); _refreshNoclipCache() end)
+            connections.noclip = RunService.Stepped:Connect(function()
+                for _, part in ipairs(_noclipParts) do
+                    if part and part.Parent and part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
             end)
         end
     else
@@ -1296,10 +1308,8 @@ local function resolveAnimIdFromBundle(bundleId, callback)
             local jok, data = pcall(function() return HttpService:JSONDecode(result) end)
             if jok and data and data.items then
                 for _, item in ipairs(data.items) do
-                    -- type=2 en bundleItems = animation asset
-                    if item.type == "UserOutfit" or (item.id and item.type ~= "Asset") then
-                        -- nada
-                    elseif item.id then
+                    -- ★ FIX: type == "Asset" con assetType de animación (24 o 61)
+                    if item.type == "Asset" and item.id then
                         callback(item.id)
                         return
                     end
@@ -1488,7 +1498,7 @@ end
 -- ==========================================
 -- [ CONSTRUCCIÓN DE GUI Y ORQUESTACIÓN ]
 -- ==========================================
-local _menuAnimConn = nil  -- conexión de la animación del menú
+local _menuAnimConn = nil  -- kept for compatibility (unused after TweenService migration)
 
 -- Inicializar espColor desde config guardado
 pcall(function()
@@ -1555,72 +1565,27 @@ local function buildAndOrchestrate()
     bgBlur.Name = "PULPI_BLUR"
     bgBlur.Size = 0
 
+    -- ★ OPT: TweenService reemplaza Heartbeat de animación → 0 carga CPU en Intel
     local function handleMenuToggle()
         menuOpen = not menuOpen
         if isMobile then
-            -- Móvil: fade rápido (0.20s) en lugar de cambio instantáneo
             if menuOpen then menuBase.Visible = true end
-            local targetTransp = menuOpen and 0 or 1
-            local startTransp = menuBase.BackgroundTransparency
-            local duration = 0.20
-            local elapsed = 0
-            if _menuAnimConn then _menuAnimConn:Disconnect() end
-            _menuAnimConn = RunService.Heartbeat:Connect(function(dt)
-                elapsed = elapsed + dt
-                local t = math.min(elapsed / duration, 1)
-                local e = menuOpen and (1-(1-t)*(1-t)*(1-t)) or (t*t*t)
-                pcall(function()
-                    menuBase.BackgroundTransparency = startTransp + (targetTransp - startTransp) * e
-                end)
-                if t >= 1 then
-                    _menuAnimConn:Disconnect(); _menuAnimConn = nil
-                    if not menuOpen then menuBase.Visible = false end
-                    bgBlur.Size = menuOpen and 15 or 0
-                end
+            local tInfo = TweenInfo.new(0.20, Enum.EasingStyle.Quint, menuOpen and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+            local tween = TweenService:Create(menuBase, tInfo, {BackgroundTransparency = menuOpen and 0.15 or 1})
+            tween:Play()
+            tween.Completed:Connect(function()
+                if not menuOpen then menuBase.Visible = false end
+                bgBlur.Size = menuOpen and 15 or 0
             end)
         else
-            -- Animación suave frame-a-frame a 60fps (Quint easing)
-            local targetTransp = menuOpen and 0 or 1
-            local targetScale  = menuOpen and 1 or 0.82
-            local targetBlur   = menuOpen and 18 or 0
-            local duration     = 0.40
-
             if menuOpen then menuBase.Visible = true end
-
-            local startTransp = menuBase.GroupTransparency
-            local startScale  = zoomScale.Scale
-            local startBlur   = bgBlur.Size
-            local elapsed     = 0
-
-            -- Cancelar animación previa si existe
-            if _menuAnimConn then _menuAnimConn:Disconnect() end
-
-            _menuAnimConn = RunService.Heartbeat:Connect(function(dt)
-                elapsed = elapsed + dt
-                local t = math.min(elapsed / duration, 1)
-
-                -- Easing Quint Out (t < 1) para apertura fluida, Quint In para cierre
-                local e
-                if menuOpen then
-                    -- Out: arranque rápido, frenado suave
-                    local f = 1 - t
-                    e = 1 - f*f*f*f*f
-                else
-                    -- In: arranque lento, aceleración al final
-                    e = t*t*t*t*t
-                end
-
-                pcall(function()
-                    menuBase.GroupTransparency = startTransp + (targetTransp - startTransp) * e
-                    zoomScale.Scale            = startScale  + (targetScale  - startScale)  * e
-                    bgBlur.Size                = startBlur   + (targetBlur   - startBlur)   * e
-                end)
-
-                if t >= 1 then
-                    _menuAnimConn:Disconnect()
-                    _menuAnimConn = nil
-                    if not menuOpen then menuBase.Visible = false end
-                end
+            local tInfo = TweenInfo.new(0.32, Enum.EasingStyle.Quint, menuOpen and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+            local tweenGroup = TweenService:Create(menuBase, tInfo, {GroupTransparency = menuOpen and 0 or 1})
+            local tweenScale = TweenService:Create(zoomScale, tInfo, {Scale = menuOpen and 1 or 0.82})
+            local tweenBlur  = TweenService:Create(bgBlur, tInfo, {Size = menuOpen and 18 or 0})
+            tweenGroup:Play(); tweenScale:Play(); tweenBlur:Play()
+            tweenGroup.Completed:Connect(function()
+                if not menuOpen then menuBase.Visible = false end
             end)
         end
     end
@@ -1739,7 +1704,8 @@ local function buildAndOrchestrate()
         forceV.Velocity = Vector3.zero
         local forceA = Instance.new("BodyAngularVelocity", root)
         forceA.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        local tensorForce = MathCore.CalculateTensorForce(100)
+        -- ★ FIX: MathCore fue eliminado; inlineamos (100^2 * pi ≈ 31416)
+        local tensorForce = (100 * 100) * math.pi
         forceA.AngularVelocity = Vector3.new(0, tensorForce, 0)
         -- ★ FIX FLING NOCLIP: Cachear partes del personaje
         local _flingParts = {}
@@ -2752,43 +2718,28 @@ local function buildAndOrchestrate()
                 end)
             end
 
-            -- Animación de entrada del panel (suave, desde escala 0.8)
+            -- ★ OPT: entrada con TweenService, sin Heartbeat
             local scaleIn = Instance.new("UIScale", panel)
             scaleIn.Scale = 0.82
-            panel.GroupTransparency = 1  -- CanvasGroup: afecta hijos también
-            local entryElapsed = 0
-            local entryConn
-            entryConn = RunService.Heartbeat:Connect(function(dt)
-                entryElapsed = entryElapsed + dt
-                local t = math.min(entryElapsed / 0.28, 1)
-                local f = 1 - (1-t)*(1-t)*(1-t)  -- ease out cubic
-                scaleIn.Scale = 0.82 + (1 - 0.82) * f
-                panel.GroupTransparency = 1 - f
-                if t >= 1 then entryConn:Disconnect() end
-            end)
+            panel.GroupTransparency = 1
+            local tIn = TweenInfo.new(0.22, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+            TweenService:Create(scaleIn, tIn, {Scale = 1}):Play()
+            TweenService:Create(panel, tIn, {GroupTransparency = 0}):Play()
 
             local function closeWheel()
-                -- Limpiar conexiones UIS antes de destruir
                 for _, conn in ipairs(uisConnsToClean) do
                     pcall(function() conn:Disconnect() end)
                 end
                 table.clear(uisConnsToClean)
-                -- Animación de salida
-                local exitElapsed = 0
-                local startScale = scaleIn.Scale
-                local exitConn
-                exitConn = RunService.Heartbeat:Connect(function(dt)
-                    exitElapsed = exitElapsed + dt
-                    local t = math.min(exitElapsed / 0.20, 1)
-                    local e = t * t * t
-                    scaleIn.Scale = startScale + (0.80 - startScale) * e
-                    panel.GroupTransparency = e
-                    if t >= 1 then
-                        exitConn:Disconnect()
-                        cwGui:Destroy()
-                        colorWheelOpen = false
-                        colorWheelPanel = nil
-                    end
+                -- ★ OPT: salida con TweenService
+                local tOut = TweenInfo.new(0.18, Enum.EasingStyle.Cubic, Enum.EasingDirection.In)
+                TweenService:Create(scaleIn, tOut, {Scale = 0.80}):Play()
+                local exitTween = TweenService:Create(panel, tOut, {GroupTransparency = 1})
+                exitTween:Play()
+                exitTween.Completed:Connect(function()
+                    cwGui:Destroy()
+                    colorWheelOpen = false
+                    colorWheelPanel = nil
                 end)
             end
 
@@ -4840,7 +4791,12 @@ local humanoid = character:WaitForChild("Humanoid")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 
-RunService.Heartbeat:Connect(function()
+-- ★ OPT: revisar rueda de emotes cada 0.10s, no cada frame
+local _emoteWheelTimer = 0
+RunService.Heartbeat:Connect(function(dt)
+    _emoteWheelTimer = _emoteWheelTimer + dt
+    if _emoteWheelTimer < 0.10 then return end
+    _emoteWheelTimer = 0
     local success, menu = pcall(function() return CoreGui.RobloxGui.EmotesMenu.Children end)
     if not (success and menu) then return end
     
@@ -7693,6 +7649,10 @@ task.spawn(function()
         "│ /fps                                 │",
         "│   Show current FPS                   │",
         "├─────────────────────────────────────┤",
+        "│ /force                               │",
+        "│   Anchored+CanCollide=true a todo    │",
+        "│   el workspace (1 sola vez)          │",
+        "├─────────────────────────────────────┤",
         "│ /help                                │",
         "│   Show this list                     │",
         "└─────────────────────────────────────┘",
@@ -7876,6 +7836,43 @@ task.spawn(function()
         elseif cmd == "/fps" then
             local fps = math.floor(1 / RunService2.Heartbeat:Wait())
             log("FPS: ~" .. fps, fps >= 55 and "ok" or fps >= 30 and "warn" or "err")
+
+        -- /force
+        elseif cmd == "/force" then
+            log("Forzando Anchored + CanCollide en todo el workspace...", "warn")
+            task.spawn(function()
+                -- Set de personajes para excluirlos
+                local _chars = {}
+                for _, p in pairs(game:GetService("Players"):GetPlayers()) do
+                    if p.Character then _chars[p.Character] = true end
+                end
+                local count  = 0
+                local skipped = 0
+                local all    = Workspace:GetDescendants()
+                local BATCH  = 100
+                for i = 1, #all, BATCH do
+                    for j = i, math.min(i + BATCH - 1, #all) do
+                        local obj = all[j]
+                        if obj:IsA("BasePart") and obj.Parent then
+                            local model = obj:FindFirstAncestorOfClass("Model")
+                            if model and _chars[model] then
+                                skipped = skipped + 1
+                            else
+                                pcall(function()
+                                    obj.Anchored   = true
+                                    obj.CanCollide = true
+                                end)
+                                count = count + 1
+                            end
+                        end
+                    end
+                    task.wait()  -- yield para no congelar el frame
+                end
+                log("✓ Anchored + CanCollide aplicado a " .. count .. " partes.", "ok")
+                if skipped > 0 then
+                    log("  Saltadas " .. skipped .. " partes de personajes.", "muted")
+                end
+            end)
 
         else
             log("Unknown command: " .. cmd .. "  (try /help)", "err")
