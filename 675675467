@@ -7206,8 +7206,22 @@ task.spawn(function()
     local histIdx     = 0
     local ndsActive   = false
     local ndsConn     = nil
+    local ndsTick     = 0
     local luauOpen    = false
     local luauGui     = nil
+    local fpsNow      = 60
+    local fpsFrames   = 0
+    local fpsElapsed  = 0
+
+    RunService2.RenderStepped:Connect(function(dt)
+        fpsElapsed = fpsElapsed + dt
+        fpsFrames = fpsFrames + 1
+        if fpsElapsed >= 0.5 then
+            fpsNow = math.floor(fpsFrames / fpsElapsed + 0.5)
+            fpsElapsed = 0
+            fpsFrames = 0
+        end
+    end)
 
     -- ── CMD GUI ────────────────────────────────────────
     local cmdScreen = Instance.new("ScreenGui", gui2parent)
@@ -7379,7 +7393,10 @@ task.spawn(function()
     local function startNDS()
         if ndsConn then return end
         log("[NDS] Bypass active: fall damage + fly damage off", "sys")
-        ndsConn = RunService2.Heartbeat:Connect(function()
+        ndsConn = RunService2.Heartbeat:Connect(function(dt)
+            ndsTick = ndsTick + dt
+            if ndsTick < 0.12 then return end
+            ndsTick = 0
             pcall(function()
                 local char = lplr.Character
                 if not char then return end
@@ -7403,6 +7420,7 @@ task.spawn(function()
     local function stopNDS()
         if ndsConn then ndsConn:Disconnect(); ndsConn = nil end
         ndsActive = false
+        ndsTick = 0
         log("[NDS] Bypass deactivated", "warn")
     end
 
@@ -7434,23 +7452,36 @@ task.spawn(function()
         local eStroke = Instance.new("UIStroke", execFrame)
         eStroke.Color     = Color3.fromRGB(120, 80, 255)
         eStroke.Thickness = 2
+        local execConns = {}
+        local function bindExec(conn)
+            table.insert(execConns, conn)
+            return conn
+        end
+        local function clearExecConns()
+            for _, conn in ipairs(execConns) do
+                if conn and conn.Disconnect then
+                    conn:Disconnect()
+                end
+            end
+            execConns = {}
+        end
 
         -- Drag executor
         local eDragActive, eDragStart, eDragOrigin = false, nil, nil
-        execFrame.InputBegan:Connect(function(i)
+        bindExec(execFrame.InputBegan:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
                 eDragActive = true; eDragStart = i.Position; eDragOrigin = execFrame.Position
             end
-        end)
-        UIS2.InputChanged:Connect(function(i)
+        end))
+        bindExec(UIS2.InputChanged:Connect(function(i)
             if eDragActive and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
                 local d = i.Position - eDragStart
                 execFrame.Position = UDim2.new(eDragOrigin.X.Scale, eDragOrigin.X.Offset + d.X, eDragOrigin.Y.Scale, eDragOrigin.Y.Offset + d.Y)
             end
-        end)
-        UIS2.InputEnded:Connect(function(i)
+        end))
+        bindExec(UIS2.InputEnded:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then eDragActive = false end
-        end)
+        end))
 
         -- Title
         local eTitleBar = Instance.new("Frame", execFrame)
@@ -7606,21 +7637,21 @@ task.spawn(function()
             else execLog("Execution complete ✓", false) end
         end
 
-        runBtn2.MouseButton1Click:Connect(executeCode)
-        clearBtn.MouseButton1Click:Connect(function() codeBox.Text = "" execLog("Cleared.", false) end)
-        resetBtn.MouseButton1Click:Connect(function()
+        bindExec(runBtn2.MouseButton1Click:Connect(executeCode))
+        bindExec(clearBtn.MouseButton1Click:Connect(function() codeBox.Text = "" execLog("Cleared.", false) end))
+        bindExec(resetBtn.MouseButton1Click:Connect(function()
             codeBox.Text = ""
             for _, c in pairs(execOutput:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
             outCount = 0
-        end)
+        end))
 
         -- Also run on Ctrl+Enter (keyboard)
-        UIS2.InputBegan:Connect(function(input, gpe)
+        bindExec(UIS2.InputBegan:Connect(function(input, gpe)
             if gpe then return end
             if input.KeyCode == Enum.KeyCode.Return and UIS2:IsKeyDown(Enum.KeyCode.LeftControl) then
                 executeCode()
             end
-        end)
+        end))
 
         -- Fade-in animation
         local eAnimConn; local eElapsed = 0
@@ -7633,6 +7664,7 @@ task.spawn(function()
         end)
 
         local function closeExec()
+            clearExecConns()
             local ex2 = 0; local startT = execFrame.GroupTransparency
             local exitC; exitC = RunService2.Heartbeat:Connect(function(dt)
                 ex2 = ex2 + dt
@@ -7852,7 +7884,11 @@ task.spawn(function()
                 log("God mode OFF.", "warn")
             else
                 godActive = true
-                godConn = RunService2.Heartbeat:Connect(function()
+                local godTick = 0
+                godConn = RunService2.Heartbeat:Connect(function(dt)
+                    godTick = godTick + dt
+                    if godTick < 0.15 then return end
+                    godTick = 0
                     pcall(function()
                         local hum = lplr.Character and lplr.Character:FindFirstChildOfClass("Humanoid")
                         if hum then
@@ -7874,7 +7910,7 @@ task.spawn(function()
 
         -- /fps
         elseif cmd == "/fps" then
-            local fps = math.floor(1 / RunService2.Heartbeat:Wait())
+            local fps = fpsNow
             log("FPS: ~" .. fps, fps >= 55 and "ok" or fps >= 30 and "warn" or "err")
 
         else
@@ -7928,6 +7964,7 @@ task.spawn(function()
     log("└─────────────────────────────┘", "sys")
     log("Type /help for a list of commands.", "info")
     log("Keybind: Ctrl + ` to open/close", "muted")
+    log("[OPT] CMD optimizado: menos consumo de CPU/FPS y fugas de conexiones corregidas.", "ok")
 
     -- Also bind Ctrl+T as an alternative
     UIS2.InputBegan:Connect(function(input, gpe)
