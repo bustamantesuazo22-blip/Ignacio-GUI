@@ -487,13 +487,23 @@ if game.PlaceId == 189707 then
                 -- ¿Es parte de un personaje? lookup O(1)
                 local model = part:FindFirstAncestorOfClass("Model")
                 if not (model and _charModels[model]) then
-                    -- Solidificar: anclada Y con colisión
-                if not _G.PULPI_partsToolActive then
-                    pcall(function()
-                        part.Anchored   = true
-                        part.CanCollide = true
-                    end)
-                end
+                    if not _G.PULPI_partsToolActive then
+                        -- ★ FIX BUG-NDS-FLIP: NO anclar en el mismo frame de DescendantAdded.
+                        -- Cuando un modelo aparece en NDS, el servidor replica cada parte
+                        -- individualmente. En el frame en que llega al cliente, el CFrame
+                        -- todavia puede estar en el valor por defecto (antes de posicionarla).
+                        -- Anclar inmediatamente congela ese CFrame incorrecto -> estructura volteada.
+                        -- task.defer espera al siguiente ciclo del scheduler, despues de que
+                        -- el motor de replicacion haya aplicado el CFrame final del servidor.
+                        task.defer(function()
+                            if part and part.Parent and not _G.PULPI_partsToolActive then
+                                pcall(function()
+                                    part.Anchored   = true
+                                    part.CanCollide = true
+                                end)
+                            end
+                        end)
+                    end
                 end
             end
         end
@@ -663,11 +673,27 @@ end
 
 playSound("2865227271")
 
+-- ============================================================
+-- [ NETWORK + RING SYSTEM — SISTEMA DE RING v4 (FIXED) ]
+--   BUG-A FIXED : AlignPosition MaxForce/MaxVelocity capeados
+--                 (infinito → partes traversaban el piso)
+--   BUG-B FIXED : guard BasePart en addPart/DescendantAdded
+--                 (antes disparaba para Sounds, Scripts, etc.)
+--   BUG-C FIXED : swap-remove O(1) en removePart y ring loop
+--                 (table.remove era O(n²) en mapas grandes)
+--   BUG-D FIXED : AssemblyLinearVelocity en vez de .Velocity
+--                 (.Velocity está deprecado desde 2021 y es ignorado
+--                  por el solver en modelos ensamblados)
+--   BUG-I FIXED : SimulationRadius 1e9, NO math.huge
+--                 (math.huge causaba desync masivo + crash de memoria)
+-- ============================================================
+
 if not getgenv().Network then
     getgenv().Network = {
         BaseParts = {},
-        Velocity = Vector3.new(14.46262424, 14.46262424, 14.46262424)
+        Velocity  = Vector3.new(14.46262424, 14.46262424, 14.46262424)
     }
+
     getgenv().Network.RetainPart = function(Part)
         if typeof(Part) == "Instance" and Part:IsA("BasePart") and Part:IsDescendantOf(Workspace) then
             if Part.Anchored then return end
@@ -679,84 +705,116 @@ if not getgenv().Network then
             Part.CanCollide = false
         end
     end
-    -- ★ FIX: Limpiar partes eliminadas de Network.BaseParts para evitar el leak
+
+    -- Limpia partes destruidas de BaseParts para evitar memory leak
     getgenv().Network.RemovePart = function(Part)
-        local parts = getgenv().Network.BaseParts
-        for i = #parts, 1, -1 do
-            if parts[i] == Part then
-                table.remove(parts, i)
+        local bp = getgenv().Network.BaseParts
+        for i = #bp, 1, -1 do
+            if bp[i] == Part then
+                -- FIX BUG-C: swap-remove O(1)
+                bp[i] = bp[#bp]; bp[#bp] = nil
                 return
             end
         end
     end
+
     local function EnablePartControl()
         LocalPlayer.ReplicationFocus = Workspace
-        local _networkCleanupTimer = 0
-        -- ★ OPT: throttle principal a 10fps (era cada frame) → -80% carga en Intel
-        local _networkTickTimer = 0
-        local _networkTickInterval = 1/10
+        local _cleanTimer = 0
+        local _tickTimer  = 0
+        local _TICK_INTERVAL = 1/10  -- 10 fps — antes era cada frame (60fps), -83% CPU
+
         RunService.Heartbeat:Connect(function(dt)
-            _networkCleanupTimer = _networkCleanupTimer + dt
-            _networkTickTimer    = _networkTickTimer    + dt
-            if _networkCleanupTimer >= 10 then
-                _networkCleanupTimer = 0
-                pcall(function() sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end)
-                local parts = getgenv().Network.BaseParts
-                for i = #parts, 1, -1 do
-                    local p = parts[i]
+            _cleanTimer = _cleanTimer + dt
+            _tickTimer  = _tickTimer  + dt
+
+            -- Limpieza de partes muertas + SimulationRadius cada 10 segundos
+            if _cleanTimer >= 10 then
+                _cleanTimer = 0
+                -- FIX BUG-I: math.huge → desync total del servidor
+                -- 1e9 studs es prácticamente infinito sin activar el path problemático
+                pcall(function()
+                    sethiddenproperty(LocalPlayer, "SimulationRadius", 1e9)
+                end)
+                local bp = getgenv().Network.BaseParts
+                for i = #bp, 1, -1 do
+                    local p = bp[i]
                     if not p or not p.Parent or not p:IsDescendantOf(Workspace) then
-                        table.remove(parts, i)
+                        bp[i] = bp[#bp]; bp[#bp] = nil
                     end
                 end
             end
-            -- ★ OPT: solo procesar partes cada 10fps
-            if _networkTickTimer < _networkTickInterval then return end
-            _networkTickTimer = 0
-            local parts = getgenv().Network.BaseParts
+
+            if _tickTimer < _TICK_INTERVAL then return end
+            _tickTimer = 0
+
+            local bp  = getgenv().Network.BaseParts
             local vel = getgenv().Network.Velocity
-            for i = #parts, 1, -1 do
-                local Part = parts[i]
+            for i = #bp, 1, -1 do
+                local P = bp[i]
                 pcall(function()
-                    if Part and Part.Parent and Part:IsDescendantOf(Workspace) then
-                        Part.AssemblyLinearVelocity = vel
+                    if P and P.Parent and P:IsDescendantOf(Workspace) then
+                        -- FIX BUG-D: .Velocity está deprecado; el solver lo ignora
+                        P.AssemblyLinearVelocity = vel
                     else
-                        table.remove(parts, i)
+                        bp[i] = bp[#bp]; bp[#bp] = nil
                     end
                 end)
             end
         end)
     end
+
     EnablePartControl()
 end
 
-local FolderRing = Instance.new("Folder", Workspace)
-local PartRing = Instance.new("Part", FolderRing)
+-- Anchor invisible — destino del AlignPosition de cada pieza del ring
+local FolderRing      = Instance.new("Folder", Workspace)
+local PartRing        = Instance.new("Part",   FolderRing)
 local Attachment1Ring = Instance.new("Attachment", PartRing)
-PartRing.Anchored = true
-PartRing.CanCollide = false
+PartRing.Name         = "PULPI_RING_ANCHOR"
+PartRing.Anchored     = true
+PartRing.CanCollide   = false
 PartRing.Transparency = 1
+PartRing.Size         = Vector3.new(0.05, 0.05, 0.05)
 
 local function ForcePart(v)
-    if v:IsA("Part") and not v.Anchored and not v.Parent:FindFirstChild("Humanoid") and not v.Parent:FindFirstChild("Head") and v.Name ~= "Handle" then
+    if v:IsA("Part") and not v.Anchored
+        and not v.Parent:FindFirstChild("Humanoid")
+        and not v.Parent:FindFirstChild("Head")
+        and v.Name ~= "Handle" then
+
+        -- Limpiar fuerzas previas para evitar conflictos con el solver
         for _, x in next, v:GetChildren() do
-            if x:IsA("BodyAngularVelocity") or x:IsA("BodyForce") or x:IsA("BodyGyro") or x:IsA("BodyPosition") or x:IsA("BodyThrust") or x:IsA("BodyVelocity") or x:IsA("RocketPropulsion") then
+            if x:IsA("BodyAngularVelocity") or x:IsA("BodyForce")    or x:IsA("BodyGyro")
+            or x:IsA("BodyPosition")        or x:IsA("BodyThrust")   or x:IsA("BodyVelocity")
+            or x:IsA("RocketPropulsion") then
                 x:Destroy()
             end
         end
-        if v:FindFirstChild("Attachment") then v:FindFirstChild("Attachment"):Destroy() end
+        if v:FindFirstChild("Attachment")    then v:FindFirstChild("Attachment"):Destroy()    end
         if v:FindFirstChild("AlignPosition") then v:FindFirstChild("AlignPosition"):Destroy() end
-        if v:FindFirstChild("Torque") then v:FindFirstChild("Torque"):Destroy() end
+        if v:FindFirstChild("Torque")        then v:FindFirstChild("Torque"):Destroy()        end
+
         v.CanCollide = false
-        local Torque = Instance.new("Torque", v)
-        Torque.Torque = Vector3.new(100000, 100000, 100000)
-        local AlignPosition = Instance.new("AlignPosition", v)
-        local Attachment2 = Instance.new("Attachment", v)
-        Torque.Attachment0 = Attachment2
-        AlignPosition.MaxForce = 9999999999999999
-        AlignPosition.MaxVelocity = math.huge
-        AlignPosition.Responsiveness = 200
-        AlignPosition.Attachment0 = Attachment2
-        AlignPosition.Attachment1 = Attachment1Ring
+        v.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+
+        local Att2         = Instance.new("Attachment",   v)
+        local Torque       = Instance.new("Torque",       v)
+        local AlignPos     = Instance.new("AlignPosition", v)
+        Torque.Attachment0 = Att2
+        Torque.Torque      = Vector3.new(100000, 100000, 100000)
+
+        -- FIX BUG-A: valores infinitos → tunneling a través del suelo.
+        -- El integrador discreto de Roblox no puede resolver colisiones cuando
+        -- la pieza se mueve más de ~su propio tamaño por step (≈0.016s).
+        -- 4e5 N  → fuerza suficiente para mover cualquier BasePart típica
+        -- 80 s/s → velocidad máxima de convergencia que el solver puede integrar
+        -- 50 resp → menos overshooting, sin oscilación alrededor del target
+        AlignPos.MaxForce      = 4e5
+        AlignPos.MaxVelocity   = 80
+        AlignPos.Responsiveness = 50
+        AlignPos.Attachment0   = Att2
+        AlignPos.Attachment1   = Attachment1Ring
     end
 end
 
@@ -765,7 +823,8 @@ local function RetainPart(Part)
         if Part.Parent == LocalPlayer.Character or Part:IsDescendantOf(LocalPlayer.Character) then return false end
         local parentModel = Part:FindFirstAncestorOfClass("Model")
         if parentModel and parentModel:FindFirstChildOfClass("Humanoid") then return false end
-        local mapKeywords = {"Floor", "Wall", "Roof", "Base", "Terrain", "Ground", "Platform", "Stair", "Step", "Door", "Window", "Ceil"}
+        -- Filtrar piezas de mapa que no deben moverse
+        local mapKeywords = {"Floor","Wall","Roof","Base","Terrain","Ground","Platform","Stair","Step","Door","Window","Ceil"}
         for _, kw in pairs(mapKeywords) do
             if string.find(Part.Name, kw) then return false end
         end
@@ -777,30 +836,47 @@ local function RetainPart(Part)
 end
 
 local partsRing = {}
+
 local function addPart(part)
+    -- FIX BUG-B: sin este guard, DescendantAdded llamaba RetainPart para CADA
+    -- Attachment, Sound, Script, Decal, etc. → spikes de CPU en mapas complejos.
+    if not part:IsA("BasePart") then return end
     if RetainPart(part) then
-        if not table.find(partsRing, part) then table.insert(partsRing, part) end
+        if not table.find(partsRing, part) then
+            table.insert(partsRing, part)
+        end
     end
 end
+
 local function removePart(part)
+    -- FIX BUG-C: swap-remove O(1).
+    -- table.remove(t, i) desplaza todos los elementos → O(n) por llamada.
+    -- En un mapa con 1000 piezas y limpieza frecuente = O(n²) de trabajo total.
     local index = table.find(partsRing, part)
-    if index then table.remove(partsRing, index) end
+    if index then
+        partsRing[index] = partsRing[#partsRing]
+        partsRing[#partsRing] = nil
+    end
 end
 
-for _, part in pairs(Workspace:GetDescendants()) do addPart(part) end
+-- Scan inicial del mapa
+for _, part in pairs(Workspace:GetDescendants()) do
+    addPart(part)
+end
+
 Workspace.DescendantAdded:Connect(addPart)
 Workspace.DescendantRemoving:Connect(function(part)
     removePart(part)
-    -- ★ FIX: también limpiar de Network.BaseParts para evitar el leak
     if getgenv().Network and getgenv().Network.RemovePart then
         getgenv().Network.RemovePart(part)
     end
 end)
 
--- ★ OPT: throttle 15fps (era 20fps) + max 80 partes/tick para Intel
-local _ringDt = 0
-local _ringInterval = 1/15
-local _RING_MAX_PER_TICK = 80
+-- Ring Heartbeat: throttle a 15 fps + máx 80 piezas/tick
+-- (sin throttle el loop bloqueaba el thread principal en mapas grandes)
+local _ringDt         = 0
+local _ringInterval   = 1/15
+local _RING_MAX_TICK  = 80
 
 RunService.Heartbeat:Connect(function(dt)
     if not ringPartsEnabled then return end
@@ -808,41 +884,46 @@ RunService.Heartbeat:Connect(function(dt)
     if _ringDt < _ringInterval then return end
     _ringDt = 0
 
-    local humanoidRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return end
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-    local tornadoCenter = humanoidRootPart.Position
-    local ringRadius    = SavedConfig.RingRadius
-    -- ★ FIX: el cull usa el radio REAL del ring (no un cap hardcodeado de 120)
-    local cullDist      = math.max(150, ringRadius * 2.2)
-    local cullRadius    = cullDist * cullDist  -- comparar distancia^2 sin sqrt
+    local center     = hrp.Position
+    local ringRadius = SavedConfig.RingRadius
+    local cullDist   = math.max(150, ringRadius * 2.2)
+    local cullSq     = cullDist * cullDist   -- comparar dist² evita sqrt innecesarios
 
     local processed = 0
     for i = #partsRing, 1, -1 do
-        if processed >= _RING_MAX_PER_TICK then break end
+        if processed >= _RING_MAX_TICK then break end
         local part = partsRing[i]
+
         if not part or not part.Parent then
-            table.remove(partsRing, i)
+            -- FIX BUG-C: swap-remove en el loop también
+            partsRing[i] = partsRing[#partsRing]
+            partsRing[#partsRing] = nil
         else
             pcall(function()
                 if not part.Anchored then
                     local pos = part.Position
-                    local dx = pos.X - tornadoCenter.X
-                    local dz = pos.Z - tornadoCenter.Z
-                    if (dx*dx + dz*dz) > cullRadius then return end
+                    local dx  = pos.X - center.X
+                    local dz  = pos.Z - center.Z
+                    -- Culling de distancia: ignorar partes lejos del jugador
+                    if (dx*dx + dz*dz) > cullSq then return end
 
                     processed = processed + 1
-                    local distance = math.sqrt(dx*dx + dz*dz)
-                    local angle = math.atan2(pos.Z - tornadoCenter.Z, pos.X - tornadoCenter.X)
+                    local dist     = math.sqrt(dx*dx + dz*dz)
+                    local angle    = math.atan2(pos.Z - center.Z, pos.X - center.X)
                     local newAngle = angle + math.rad(rotationSpeed)
-                    local clampedDist = math.min(ringRadius, distance)
+                    local clampedD = math.min(ringRadius, dist)
+
                     local targetPos = Vector3.new(
-                        tornadoCenter.X + math.cos(newAngle) * clampedDist,
-                        tornadoCenter.Y + (height * (math.abs(math.sin((pos.Y - tornadoCenter.Y) / height)))),
-                        tornadoCenter.Z + math.sin(newAngle) * clampedDist
+                        center.X + math.cos(newAngle) * clampedD,
+                        center.Y + (height * math.abs(math.sin((pos.Y - center.Y) / height))),
+                        center.Z + math.sin(newAngle) * clampedD
                     )
-                    local directionToTarget = (targetPos - pos).unit
-                    part.Velocity = directionToTarget * attractionStrength
+                    local dir = (targetPos - pos).Unit
+                    -- FIX BUG-D: BasePart.Velocity ignorado por el solver moderno
+                    part.AssemblyLinearVelocity = dir * attractionStrength
                 end
             end)
         end
@@ -1009,9 +1090,9 @@ local function openPartsTool(logFn)
 
         partAtt  = Instance.new("Attachment", grabbedPart)
         alignPos = Instance.new("AlignPosition", grabbedPart)
-        alignPos.MaxForce      = 9999999999999999
-        alignPos.MaxVelocity   = math.huge
-        alignPos.Responsiveness = 200
+        alignPos.MaxForce      = 4e5
+        alignPos.MaxVelocity   = 80
+        alignPos.Responsiveness = 50
         alignPos.Attachment0   = partAtt
         alignPos.Attachment1   = ghostAtt
 
@@ -1363,11 +1444,13 @@ local function manageESP(state)
             end)
         end
     else
+        -- ★ FIX BUG-G: task.cancel() sobre un hilo en task.wait() puede lanzar una
+        -- excepción interna en el scheduler de Roblox y dejar el hilo en estado zombie.
+        -- La forma correcta es usar el propio booleano de control (SavedConfig.ESPActive = false)
+        -- que el loop ya chequea en su condición while → terminación limpia en el próximo ciclo.
         SavedConfig.ESPActive = false
-        if connections.esp then
-            pcall(function() task.cancel(connections.esp) end)
-            connections.esp = nil
-        end
+        -- connections.esp se pone nil para que manageESP(true) pueda crear un nuevo loop.
+        connections.esp = nil
         for _, p in pairs(Players:GetPlayers()) do
             pcall(function()
                 if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then
@@ -1510,7 +1593,11 @@ local function startHunt(targetPlayer)
     local bav = Instance.new("BodyAngularVelocity", hrp)
     bav.Name = "HUNT_BAV"
     bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bav.AngularVelocity = Vector3.new(999999999, 999999999, 999999999)
+    -- ★ FIX BUG-H: AngularVelocity de 999999999 rad/s destabiliza el solver de física.
+    -- El integrador de Roblox usa pasos discretos; velocidades angulares extremas hacen que
+    -- el cuerpo "salte" varios radianes por step, causando tunneling y NaN internos.
+    -- 60 rad/s en Y produce una rotación visual rápida sin romper la integración.
+    bav.AngularVelocity = Vector3.new(0, 60, 0)
     -- ★ FIX HUNT NOCLIP: Cachear partes en vez de GetDescendants() cada Stepped
     local _huntNoclipParts = {}
     local function _refreshHuntNoclipCache()
@@ -1621,9 +1708,11 @@ local function startHunt(targetPlayer)
                         torq.Attachment0 = attP
                         -- AlignPosition apuntando al anchor del target
                         local alP = Instance.new("AlignPosition", p)
-                        alP.MaxForce      = 9999999999999999
-                        alP.MaxVelocity   = math.huge
-                        alP.Responsiveness = 200
+                        alP.MaxForce      = 4e5  -- ★ FIX BUG-A3: cap force
+
+                        alP.MaxVelocity   = 80   -- ★ FIX BUG-A3: cap velocity
+
+                        alP.Responsiveness = 50  -- ★ FIX BUG-A3: reduce responsiveness
                         alP.Attachment0   = attP
                         alP.Attachment1   = huntRingAtt
                         table.insert(huntRingParts, {part=p, att=attP, align=alP, torque=torq})
@@ -1659,12 +1748,27 @@ local function startHunt(targetPlayer)
                     att1 = Instance.new("Attachment", tHrp)
                     huntBeam.Attachment1 = att1
                 end
-                bav.AngularVelocity = Vector3.new(999999999, 999999999, 999999999)
-                bv.Velocity = Vector3.zero
-                hrp.CFrame = tHrp.CFrame
-                hrp.AssemblyAngularVelocity = Vector3.new(999999999, 999999999, 999999999)
+                -- ★ FIX BUG-E: bav.AngularVelocity ya se estableció al crear bav (arriba).
+                -- Reasignarlo cada Heartbeat fuerza al solver a recalcular constraints cada frame → lag.
+                -- Solo se toca si se desconectó o reinició; aquí no hace falta.
+
+                -- ★ FIX BUG-F: hrp.CFrame = tHrp.CFrame cada frame "teletransporta" el HRP
+                -- sin pasar por el integrador de físicas → el engine detecta un salto de posición
+                -- enorme, intenta resolver penetraciones, y expulsa partes a través del suelo.
+                -- Usar BodyVelocity para perseguir al target suavemente.
+                local delta = tHrp.Position - hrp.Position
+                local dist  = delta.Magnitude
+                if dist > 0.5 then
+                    bv.Velocity = delta.Unit * math.min(dist * 20, 500)
+                else
+                    bv.Velocity = Vector3.zero
+                end
+
+                -- ★ FIX BUG-H: AssemblyAngularVelocity de 999M rad/s en hrp Y en tHrp
+                -- causa NaN en el integrador y hace que ambos personajes "exploten" en física.
+                -- El giro efectivo para el efecto visual es suficiente con 60 rad/s en Y.
+                hrp.AssemblyAngularVelocity = Vector3.new(0, 60, 0)
                 hrp.AssemblyLinearVelocity = Vector3.zero
-                pcall(function() tHrp.AssemblyAngularVelocity = Vector3.new(999999999, 999999999, 999999999) end)
             else
                 stopHunt()
                 pcall(function()
