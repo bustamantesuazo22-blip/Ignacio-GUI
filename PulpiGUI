@@ -10,6 +10,7 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local StarterGui = game:GetService("StarterGui")
 local SoundService = game:GetService("SoundService")
 local TextChatService = game:GetService("TextChatService")
+local TeleportService = game:GetService("TeleportService")
 
 local player = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
@@ -90,6 +91,66 @@ local catalogPanelActive = false   -- NUEVO: estado del panel catálogo
 local headlessCache = {}
 local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil, noclip = nil}
 local espColor = Color3.new(1, 1, 1)  -- color actual del ESP, sincronizado con SavedConfig
+
+-- ==========================================
+-- [ MM2 SMART ESP - Murder Mystery 2 ]
+-- ==========================================
+local IS_MM2 = game.PlaceId == 142823291
+
+-- Patrones de armas por rol (en orden de prioridad)
+local _MM2_KNIFE_PATTERNS = {"knife","murderer","murder","blade","scythe","dagger"}
+local _MM2_GUN_PATTERNS   = {"gun","sheriff","revolver","pistol","sheriff"}
+
+local function _mm2MatchesPatterns(name, patterns)
+    local n = name:lower()
+    for _, p in ipairs(patterns) do
+        if n:find(p, 1, true) then return true end
+    end
+    return false
+end
+
+-- Detecta el rol MM2 de un jugador leyendo su personaje y backpack
+local function getMM2Role(p)
+    if not p or not p.Character then return "innocent" end
+    local char = p.Character
+
+    -- 1. Arma en mano (Tool dentro del Character)
+    for _, obj in pairs(char:GetChildren()) do
+        if obj:IsA("Tool") or obj:IsA("Model") then
+            if _mm2MatchesPatterns(obj.Name, _MM2_KNIFE_PATTERNS) then return "murderer" end
+            if _mm2MatchesPatterns(obj.Name, _MM2_GUN_PATTERNS)   then return "sheriff"  end
+        end
+    end
+
+    -- 2. Arma en backpack
+    local bp = p:FindFirstChild("Backpack")
+    if bp then
+        for _, obj in pairs(bp:GetChildren()) do
+            if _mm2MatchesPatterns(obj.Name, _MM2_KNIFE_PATTERNS) then return "murderer" end
+            if _mm2MatchesPatterns(obj.Name, _MM2_GUN_PATTERNS)   then return "sheriff"  end
+        end
+    end
+
+    -- 3. StringValue/IntValue de rol en el personaje
+    for _, v in pairs(char:GetDescendants()) do
+        if v:IsA("StringValue") or v:IsA("IntValue") or v:IsA("NumberValue") then
+            local vn  = v.Name:lower()
+            local val = tostring(v.Value):lower()
+            if vn == "role" or vn == "team" or vn == "mm2role" then
+                if val:find("murder",1,true) then return "murderer" end
+                if val:find("sheriff",1,true) then return "sheriff"  end
+            end
+        end
+    end
+
+    return "innocent"
+end
+
+local _MM2_ROLE_COLORS = {
+    murderer = Color3.fromRGB(255, 30,  30),
+    sheriff  = Color3.fromRGB(30,  120, 255),
+    innocent = Color3.fromRGB(255, 255, 255),
+}
 
 -- ==========================================
 -- [ AUTO-EXECUTE: NO FALL DAMAGE UNIVERSAL ]
@@ -1198,6 +1259,7 @@ local function manageFlight(state)
                 end
                 if hum.Jump then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
             else
+                -- Teclado normal
                 if UIS:IsKeyDown(Enum.KeyCode.W) then finalDirection = finalDirection + cam.CFrame.LookVector end
                 if UIS:IsKeyDown(Enum.KeyCode.S) then finalDirection = finalDirection - cam.CFrame.LookVector end
                 if UIS:IsKeyDown(Enum.KeyCode.A) then finalDirection = finalDirection - cam.CFrame.RightVector end
@@ -1205,6 +1267,21 @@ local function manageFlight(state)
                 if UIS:IsKeyDown(Enum.KeyCode.Space) then finalDirection = finalDirection + Vector3.new(0, 1, 0) end
                 if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
                     finalDirection = finalDirection + Vector3.new(0, -1, 0)
+                end
+                -- Mando: LS=mover, LB=bajar, RB=subir
+                local gpa = _G.PULPI_GP_AXES
+                if gpa then
+                    local dz = 0.15
+                    local camL = cam.CFrame.LookVector
+                    local camR = cam.CFrame.RightVector
+                    local flatL = Vector3.new(camL.X, 0, camL.Z)
+                    local flatR = Vector3.new(camR.X, 0, camR.Z)
+                    if flatL.Magnitude > 0 then flatL = flatL.Unit end
+                    if flatR.Magnitude > 0 then flatR = flatR.Unit end
+                    if math.abs(gpa.lx) > dz then finalDirection = finalDirection + flatR * gpa.lx end
+                    if math.abs(gpa.ly) > dz then finalDirection = finalDirection + flatL * gpa.ly end
+                    if gpa.rb then finalDirection = finalDirection + Vector3.new(0,  1, 0) end
+                    if gpa.lb then finalDirection = finalDirection + Vector3.new(0, -1, 0) end
                 end
             end
             if finalDirection.Magnitude > 0 then
@@ -1221,37 +1298,71 @@ local function manageFlight(state)
     end
 end
 
+-- ==========================================
+-- [ SMART ESP — normal + MM2 intel ]
+-- En MM2 (PlaceId 142823291): rojo=murderer, azul=sheriff, blanco=innocent
+-- Fuera de MM2: usa espColor normal
+-- weaponEspTargets: set de Players con arma de daño (rojo siempre)
+-- ==========================================
+local weaponEspTargets = {}  -- {[Player] = true} → marcados con /weaponesp
+
+local function _getEspColorForPlayer(p)
+    -- 1) /weaponesp override: siempre rojo
+    if weaponEspTargets[p] then
+        return Color3.fromRGB(255, 30, 30)
+    end
+    -- 2) MM2 inteligente
+    if IS_MM2 then
+        local role = getMM2Role(p)
+        return _MM2_ROLE_COLORS[role] or espColor
+    end
+    -- 3) Normal
+    return espColor
+end
+
+local function _refreshAllESPColors()
+    for _, p in pairs(Players:GetPlayers()) do
+        pcall(function()
+            if p ~= player and p.Character then
+                local hl = p.Character:FindFirstChild("PULPI_ESP_V12")
+                if hl then
+                    hl.OutlineColor = _getEspColorForPlayer(p)
+                end
+            end
+        end)
+    end
+end
+
 local function manageESP(state)
     if state ~= nil then SavedConfig.ESPActive = state else SavedConfig.ESPActive = not SavedConfig.ESPActive end
     SaveData()
     if SavedConfig.ESPActive then
         if not connections.esp then
-            -- ★ FIX ESP: No necesita correr en cada frame — los Highlights son persistentes.
-            -- Usamos un loop throttleado cada 2 segundos para agregar/limpiar highlights.
+            -- Loop throttleado: en MM2 refresca cada 1.5s (roles cambian)
+            -- fuera de MM2 cada 2s es suficiente
+            local interval = IS_MM2 and 1.5 or 2
             connections.esp = task.spawn(function()
                 while SavedConfig.ESPActive do
                     for _, p in pairs(Players:GetPlayers()) do
                         pcall(function()
                             if p ~= player and p.Character then
-                                if not p.Character:FindFirstChild("PULPI_ESP_V12") then
-                                    local hl = Instance.new("Highlight", p.Character)
+                                local color = _getEspColorForPlayer(p)
+                                local hl = p.Character:FindFirstChild("PULPI_ESP_V12")
+                                if not hl then
+                                    hl = Instance.new("Highlight", p.Character)
                                     hl.Name = "PULPI_ESP_V12"
                                     hl.FillTransparency = 1
-                                    hl.OutlineColor = espColor
                                     hl.OutlineTransparency = 0
-                                else
-                                    -- Actualizar color si ya existe
-                                    p.Character.PULPI_ESP_V12.OutlineColor = espColor
                                 end
+                                hl.OutlineColor = color
                             end
                         end)
                     end
-                    task.wait(2)
+                    task.wait(interval)
                 end
             end)
         end
     else
-        -- Detener el loop de ESP
         SavedConfig.ESPActive = false
         if connections.esp then
             pcall(function() task.cancel(connections.esp) end)
@@ -2845,7 +2956,57 @@ local function buildAndOrchestrate()
         spawnSection("👁  VISUALS", Color3.fromRGB(100, 60, 200))
         local visualsFrame = spawnSectionFrame()
 
-        spawnButton(visualsFrame, T("EspBtn"), function() manageESP() end)
+        -- ESP Button — MM2-aware (detecta roles si PlaceId == 142823291)
+        if IS_MM2 then
+            -- En MM2: botón especial con indicador de roles
+            local espMM2Btn = Instance.new("TextButton", visualsFrame)
+            espMM2Btn.Size = UDim2.new(1, 0, 0, isMobile and 48 or 36)
+            espMM2Btn.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
+            espMM2Btn.Text = "🔪 ESP MM2 — OFF"
+            espMM2Btn.TextColor3 = Color3.new(1, 1, 1)
+            espMM2Btn.TextScaled = true
+            espMM2Btn.Font = Enum.Font.GothamBold
+            Instance.new("UICorner", espMM2Btn).CornerRadius = UDim.new(0, 10)
+
+            -- Leyenda de colores MM2
+            local mm2Legend = Instance.new("Frame", visualsFrame)
+            mm2Legend.Size = UDim2.new(1, 0, 0, isMobile and 28 or 22)
+            mm2Legend.BackgroundTransparency = 1
+
+            local legendLayout = Instance.new("UIListLayout", mm2Legend)
+            legendLayout.FillDirection = Enum.FillDirection.Horizontal
+            legendLayout.Padding = UDim.new(0, 6)
+            legendLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+            legendLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+            local function makeLegendChip(text, color)
+                local chip = Instance.new("TextLabel", mm2Legend)
+                chip.Size = UDim2.fromOffset(0, isMobile and 24 or 18)
+                chip.AutomaticSize = Enum.AutomaticSize.X
+                chip.BackgroundColor3 = color
+                chip.Text = "  " .. text .. "  "
+                chip.TextColor3 = Color3.new(1, 1, 1)
+                chip.Font = Enum.Font.GothamBold
+                chip.TextSize = isMobile and 11 or 10
+                Instance.new("UICorner", chip).CornerRadius = UDim.new(0, 6)
+            end
+            makeLegendChip("🔪 Murderer", Color3.fromRGB(255, 30, 30))
+            makeLegendChip("🔫 Sheriff", Color3.fromRGB(30, 120, 255))
+            makeLegendChip("😇 Innocent", Color3.fromRGB(200, 200, 200))
+
+            espMM2Btn.MouseButton1Click:Connect(function()
+                manageESP()
+                if SavedConfig.ESPActive then
+                    espMM2Btn.Text = "🔪 ESP MM2 — ON"
+                    espMM2Btn.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
+                else
+                    espMM2Btn.Text = "🔪 ESP MM2 — OFF"
+                    espMM2Btn.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
+                end
+            end)
+        else
+            spawnButton(visualsFrame, T("EspBtn"), function() manageESP() end)
+        end
 
         -- ═══ RUEDA DE COLOR ESP ═══
         -- Fila ESP: botón toggle + botón "color"
@@ -2984,11 +3145,11 @@ local function buildAndOrchestrate()
                 SaveData()
                 espColorPreview.BackgroundColor3 = c
                 bigPreview.BackgroundColor3 = c
-                -- Actualizar highlights existentes
+                -- Actualizar highlights existentes con color inteligente
                 for _, p in pairs(Players:GetPlayers()) do
                     pcall(function()
                         if p.Character and p.Character:FindFirstChild("PULPI_ESP_V12") then
-                            p.Character.PULPI_ESP_V12.OutlineColor = c
+                            p.Character.PULPI_ESP_V12.OutlineColor = _getEspColorForPlayer(p)
                         end
                     end)
                 end
@@ -3213,6 +3374,7 @@ local function buildAndOrchestrate()
             end
         end)
     end
+    _G.PULPI_toggleMenu = handleMenuToggle  -- Expuesto para el addon de gamepad
 
     player.CharacterAdded:Connect(function()
         task.wait(1)
@@ -8007,6 +8169,17 @@ task.spawn(function()
         "│   GUI para mover piezas sueltas      │",
         "│   LClick=agarrar  RClick=soltar      │",
         "├─────────────────────────────────────┤",
+        "│ /weaponesp                           │",
+        "│   Escanea workspace: jugadores con   │",
+        "│   Handle de daño → ESP rojo          │",
+        "│   Segunda vez = limpiar marcas       │",
+        "├─────────────────────────────────────┤",
+        "│ /join <username>                     │",
+        "│   Únete al servidor de ese jugador   │",
+        "├─────────────────────────────────────┤",
+        "│ /joinserv <jobId> [placeId]          │",
+        "│   Únete a un server por su ID        │",
+        "├─────────────────────────────────────┤",
         "│ /help                                │",
         "│   Show this list                     │",
         "└─────────────────────────────────────┘",
@@ -8240,6 +8413,245 @@ task.spawn(function()
                 log("Parts Tool no disponible aún, espera un momento.", "warn")
             end
 
+        -- /weaponesp
+        elseif cmd == "/weaponesp" then
+            -- Si ya hay marcas activas, limpiar todo
+            local anyActive = false
+            for _ in pairs(weaponEspTargets) do anyActive = true; break end
+
+            if anyActive then
+                weaponEspTargets = {}
+                _refreshAllESPColors()
+                log("🔴 Weapon ESP limpiado. Marcas removidas.", "warn")
+            else
+                log("🔍 Escaneando workspace en busca de handles de daño...", "info")
+                task.spawn(function()
+                    -- Patrones de nombres que indican scripts/valores de daño
+                    local _DAMAGE_SCRIPT_PATTERNS = {
+                        "damage","dealdamage","hitbox","ontouch","attackscript",
+                        "swordscript","weaponscript","stabscript","hurt","inflict"
+                    }
+                    local _DAMAGE_VALUE_NAMES = {
+                        "damage","damagevalue","hitdamage","attackdamage","dealdamage",
+                        "power","dmg","weapondmg"
+                    }
+
+                    local function nameMatchesDmg(name, patterns)
+                        local n = name:lower()
+                        for _, p in ipairs(patterns) do
+                            if n:find(p, 1, true) then return true end
+                        end
+                        return false
+                    end
+
+                    local function handleHasDamage(handle)
+                        -- Check 1: child Script/LocalScript with damage-related name
+                        for _, child in pairs(handle:GetChildren()) do
+                            if (child:IsA("Script") or child:IsA("LocalScript") or child:IsA("ModuleScript")) then
+                                if nameMatchesDmg(child.Name, _DAMAGE_SCRIPT_PATTERNS) then
+                                    return true
+                                end
+                            end
+                            -- Check 2: NumberValue / IntValue named damage inside handle
+                            if (child:IsA("NumberValue") or child:IsA("IntValue")) then
+                                if nameMatchesDmg(child.Name, _DAMAGE_VALUE_NAMES) then
+                                    return true
+                                end
+                            end
+                        end
+                        -- Check 3: handle name itself implies damage (knife, sword, blade…)
+                        local _WEAPON_HANDLE_PATTERNS = {
+                            "knife","sword","blade","gun","weapon","pistol","rifle",
+                            "dagger","spear","axe","scythe","bat","staff","wand",
+                            "bow","arrow","shuriken","hammer","mace","lance"
+                        }
+                        if nameMatchesDmg(handle.Name, _WEAPON_HANDLE_PATTERNS) then
+                            return true
+                        end
+                        -- Check 4: parent Tool name implies weapon
+                        local parentTool = handle.Parent
+                        if parentTool and (parentTool:IsA("Tool") or parentTool:IsA("Model")) then
+                            if nameMatchesDmg(parentTool.Name, _WEAPON_HANDLE_PATTERNS) then
+                                return true
+                            end
+                            -- Also check Tool's children for damage scripts
+                            for _, child in pairs(parentTool:GetChildren()) do
+                                if (child:IsA("Script") or child:IsA("LocalScript")) then
+                                    if nameMatchesDmg(child.Name, _DAMAGE_SCRIPT_PATTERNS) then
+                                        return true
+                                    end
+                                end
+                            end
+                        end
+                        return false
+                    end
+
+                    -- Build O(1) character → player lookup
+                    local _charToPlayer = {}
+                    for _, p in pairs(Players:GetPlayers()) do
+                        if p.Character then _charToPlayer[p.Character] = p end
+                    end
+
+                    local found = 0
+                    local scanned = 0
+                    local all = workspace:GetDescendants()
+                    local BATCH = 150
+                    for i = 1, #all, BATCH do
+                        for j = i, math.min(i + BATCH - 1, #all) do
+                            local obj = all[j]
+                            scanned = scanned + 1
+                            -- Only care about "Handle" parts inside a Tool or Model
+                            if obj:IsA("BasePart") and obj.Name == "Handle" then
+                                if handleHasDamage(obj) then
+                                    -- Find the player who owns this handle
+                                    local ancestor = obj.Parent
+                                    while ancestor and ancestor ~= workspace do
+                                        local plr = _charToPlayer[ancestor]
+                                        if plr and plr ~= player then
+                                            if not weaponEspTargets[plr] then
+                                                weaponEspTargets[plr] = true
+                                                found = found + 1
+                                                log("🔴 Arma detectada: " .. plr.Name .. " → " .. (obj.Parent and obj.Parent.Name or "?"), "err")
+                                                -- Apply ESP immediately
+                                                if SavedConfig.ESPActive then
+                                                    pcall(function()
+                                                        local hl = plr.Character and plr.Character:FindFirstChild("PULPI_ESP_V12")
+                                                        if hl then hl.OutlineColor = Color3.fromRGB(255, 30, 30) end
+                                                    end)
+                                                end
+                                            end
+                                            break
+                                        end
+                                        ancestor = ancestor.Parent
+                                    end
+                                end
+                            end
+                        end
+                        task.wait()
+                    end
+
+                    if found == 0 then
+                        log("✅ Sin handles de daño encontrados (" .. scanned .. " objs escaneados).", "ok")
+                    else
+                        log("🔴 " .. found .. " jugador(es) con arma de daño marcados de rojo.", "err")
+                        log("   ESP activo necesario para ver marcas. Usa /weaponesp de nuevo para limpiar.", "info")
+                        -- Auto-enable ESP if not already on
+                        if not SavedConfig.ESPActive then
+                            manageESP(true)
+                            log("   ESP activado automáticamente.", "sys")
+                        end
+                    end
+                end)
+            end
+
+        -- /join <username>
+        elseif cmd == "/join" then
+            local username = parts[2]
+            if not username or username == "" then
+                log("Uso: /join <username>", "warn")
+                log("Ejemplo: /join Roblox", "muted")
+            else
+                -- Si ya está en este mismo servidor, avisar
+                local foundLocal = false
+                for _, p in pairs(Players:GetPlayers()) do
+                    if p.Name:lower() == username:lower() then
+                        foundLocal = true
+                        log("⚠ " .. p.Name .. " ya está en ESTE servidor.", "warn")
+                        break
+                    end
+                end
+                if not foundLocal then
+                    log("🔍 Buscando a " .. username .. "...", "info")
+                    task.spawn(function()
+                        -- Paso 1: userId
+                        local userId = nil
+                        local okId = pcall(function()
+                            local resp = request({
+                                Url    = "https://users.roblox.com/v1/usernames/users",
+                                Method = "POST",
+                                Headers = {["Content-Type"] = "application/json"},
+                                Body = HttpService:JSONEncode({usernames={username}, excludeBannedUsers=true})
+                            })
+                            local data = HttpService:JSONDecode(resp.Body)
+                            if data and data.data and data.data[1] then
+                                userId = data.data[1].id
+                            end
+                        end)
+                        if not okId or not userId then
+                            log("❌ Usuario '" .. username .. "' no encontrado o baneado.", "err")
+                            return
+                        end
+                        log("✓ UserId: " .. tostring(userId), "muted")
+
+                        -- Paso 2: presencia
+                        local jobId   = nil
+                        local placeId = nil
+                        local presType = 0
+                        local okPres = pcall(function()
+                            local resp = request({
+                                Url    = "https://presence.roblox.com/v1/presence/users",
+                                Method = "POST",
+                                Headers = {["Content-Type"] = "application/json"},
+                                Body = HttpService:JSONEncode({userIds = {userId}})
+                            })
+                            local data = HttpService:JSONDecode(resp.Body)
+                            if data and data.userPresences and data.userPresences[1] then
+                                local pres = data.userPresences[1]
+                                jobId    = pres.gameId
+                                placeId  = pres.placeId
+                                presType = pres.userPresenceType  -- 2 = in-game
+                            end
+                        end)
+                        if not okPres then
+                            log("❌ Error al consultar presencia. Intenta de nuevo.", "err")
+                            return
+                        end
+                        if presType ~= 2 or not jobId or jobId == "" then
+                            log("⚠ " .. username .. " no está en ningún juego ahora mismo.", "warn")
+                            return
+                        end
+                        -- Teleportar: si es otro juego usa su placeId; si es el mismo usa game.PlaceId
+                        local targetPlaceId = placeId or game.PlaceId
+                        if placeId and placeId ~= game.PlaceId then
+                            log("ℹ " .. username .. " está en PlaceId " .. tostring(placeId) .. " (diferente al tuyo).", "muted")
+                            log("Teleportando de todos modos...", "info")
+                        end
+                        log("✓ Uniéndose al servidor de " .. username .. "...", "ok")
+                        local okTp, errTp = pcall(function()
+                            TeleportService:TeleportToPlaceInstance(targetPlaceId, jobId, lplr)
+                        end)
+                        if not okTp then
+                            log("❌ Fallo teleport: " .. tostring(errTp), "err")
+                            log("El servidor puede ser privado o estar lleno.", "muted")
+                        end
+                    end)
+                end
+            end
+
+        -- /joinserv <jobId> [placeId]
+        elseif cmd == "/joinserv" then
+            local jobId  = parts[2]
+            local pId    = tonumber(parts[3]) or game.PlaceId
+            if not jobId or jobId == "" then
+                log("Uso: /joinserv <jobId> [placeId]", "warn")
+                log("jobId  = GUID del servidor  (ej: a1b2c3...)", "muted")
+                log("placeId = opcional, por defecto el juego actual", "muted")
+            else
+                log("🚀 Teleportando al servidor " .. jobId:sub(1,8) .. "...", "info")
+                if pId ~= game.PlaceId then
+                    log("PlaceId destino: " .. tostring(pId), "muted")
+                end
+                task.spawn(function()
+                    local okTp, errTp = pcall(function()
+                        TeleportService:TeleportToPlaceInstance(pId, jobId, lplr)
+                    end)
+                    if not okTp then
+                        log("❌ Error: " .. tostring(errTp), "err")
+                        log("Verifica que el jobId sea correcto y el servidor no sea privado.", "muted")
+                    end
+                end)
+            end
+
         else
             log("Unknown command: " .. cmd .. "  (try /help)", "err")
         end
@@ -8300,3 +8712,866 @@ task.spawn(function()
         end
     end)
 end)
+
+
+-- ============================================================
+-- PULPI GAMEPAD ADDON v2.0 — Xbox / PS4 / PS5
+-- Reescrito completo: bugs de forward-decl, ejes, vuelo corregidos
+-- ============================================================
+task.spawn(function()
+    task.wait(4)  -- esperar a que toda la GUI de PULPI cargue
+
+    local UIS        = game:GetService("UserInputService")
+    local RunService = game:GetService("RunService")
+    local TweenSvc   = game:GetService("TweenService")
+    local Players    = game:GetService("Players")
+    local CoreGui    = game:GetService("CoreGui")
+    local lplr       = Players.LocalPlayer
+    local cam        = workspace.CurrentCamera
+
+    -- ── Esperar mando ─────────────────────────────────────────
+    local function hasGP()
+        return UIS:IsGamepadConnected(Enum.UserInputType.Gamepad1)
+    end
+    if not hasGP() then
+        local t = 0
+        repeat task.wait(1); t = t + 1 until hasGP() or t >= 90
+        if not hasGP() then return end
+    end
+
+    -- ── Leer ejes del mando ───────────────────────────────────
+    -- BUG ORIGINAL: usaba .Z para triggers. Roblox devuelve .X para triggers.
+    local function readAxes()
+        local state = UIS:GetGamepadState(Enum.UserInputType.Gamepad1)
+        local axes = {lx=0, ly=0, rx=0, ry=0, lt=0, rt=0}
+        for _, s in pairs(state) do
+            local kc = s.KeyCode
+            if kc == Enum.KeyCode.Thumbstick1 then
+                axes.lx = s.Position.X
+                axes.ly = s.Position.Y
+            elseif kc == Enum.KeyCode.Thumbstick2 then
+                axes.rx = s.Position.X
+                axes.ry = s.Position.Y
+            elseif kc == Enum.KeyCode.ButtonL2 then
+                axes.lt = s.Position.X  -- CORRECTO: .X, no .Z
+            elseif kc == Enum.KeyCode.ButtonR2 then
+                axes.rt = s.Position.X  -- CORRECTO: .X, no .Z
+            end
+        end
+        return axes
+    end
+
+    -- ── Estado global ─────────────────────────────────────────
+    local GP = {
+        menuOpen   = false,
+        selIdx     = 1,
+        dz         = 0.20,
+        flyOn      = false,
+        flySpeed   = 65,
+        espOn      = false,
+        noclipOn   = false,
+        headlessOn = false,
+        ringOn     = false,
+    }
+
+    -- ── Tabla compartida de ejes (leída por el fly patched) ───
+    _G.PULPI_GP_AXES = {lx=0, ly=0, lb=false, rb=false}
+
+    -- ================================================================
+    -- FORWARD DECLARATIONS — deben ir ANTES del menú
+    -- BUG ORIGINAL: estaban declaradas DESPUÉS → todas nil en closures
+    -- ================================================================
+    local showNotif, updateHints, openHuntPanel
+    local startFly, stopFly
+
+    -- ── GUI ScreenGui ─────────────────────────────────────────
+    local gpGui = Instance.new("ScreenGui")
+    gpGui.Name           = "PULPI_GP2"
+    gpGui.IgnoreGuiInset = true
+    gpGui.DisplayOrder   = 600
+    gpGui.ResetOnSpawn   = false
+    gpGui.Parent         = CoreGui
+
+    -- ── Notificación flotante ─────────────────────────────────
+    local notifF = Instance.new("Frame", gpGui)
+    notifF.Size             = UDim2.fromOffset(300, 64)
+    notifF.Position         = UDim2.new(0.5, 0, 0.07, 0)
+    notifF.AnchorPoint      = Vector2.new(0.5, 0)
+    notifF.BackgroundColor3 = Color3.fromRGB(15, 15, 28)
+    notifF.BackgroundTransparency = 1
+    notifF.BorderSizePixel  = 0
+    notifF.Visible          = false
+    Instance.new("UICorner", notifF).CornerRadius = UDim.new(0, 12)
+    local notifStroke = Instance.new("UIStroke", notifF)
+    notifStroke.Thickness = 2
+    notifStroke.Color = Color3.fromRGB(100, 200, 120)
+    local notifLbl = Instance.new("TextLabel", notifF)
+    notifLbl.Size              = UDim2.fromScale(1, 1)
+    notifLbl.BackgroundTransparency = 1
+    notifLbl.TextColor3        = Color3.new(1,1,1)
+    notifLbl.Font              = Enum.Font.GothamBold
+    notifLbl.TextSize          = 13
+    notifLbl.TextWrapped       = true
+    notifLbl.TextXAlignment    = Enum.TextXAlignment.Center
+
+    local notifTimer = nil
+    showNotif = function(msg, col)
+        if notifTimer then task.cancel(notifTimer) end
+        notifLbl.Text   = "🎮 " .. msg
+        notifStroke.Color = col or Color3.fromRGB(100, 200, 120)
+        notifF.BackgroundTransparency = 0.15
+        notifF.Visible  = true
+        notifTimer = task.delay(2.8, function()
+            local tw = TweenSvc:Create(notifF, TweenInfo.new(0.4), {BackgroundTransparency=1})
+            tw:Play(); tw.Completed:Connect(function() notifF.Visible = false end)
+        end)
+    end
+
+    -- ── HUD de hints (esquina inferior derecha) ───────────────
+    local hintF = Instance.new("Frame", gpGui)
+    hintF.Size             = UDim2.fromOffset(252, 148)
+    hintF.Position         = UDim2.new(1, -260, 1, -156)
+    hintF.BackgroundColor3 = Color3.fromRGB(8, 10, 18)
+    hintF.BackgroundTransparency = 0.25
+    hintF.BorderSizePixel  = 0
+    Instance.new("UICorner", hintF).CornerRadius = UDim.new(0, 10)
+    local hintStroke = Instance.new("UIStroke", hintF)
+    hintStroke.Color = Color3.fromRGB(70, 110, 240); hintStroke.Thickness = 1.5
+
+    local hintTitle = Instance.new("TextLabel", hintF)
+    hintTitle.Size             = UDim2.new(1, 0, 0, 22)
+    hintTitle.BackgroundTransparency = 1
+    hintTitle.Text             = "🎮 PULPI MANDO"
+    hintTitle.TextColor3       = Color3.fromRGB(150, 195, 255)
+    hintTitle.Font             = Enum.Font.GothamBold
+    hintTitle.TextSize         = 12
+    hintTitle.TextXAlignment   = Enum.TextXAlignment.Center
+
+    local hintBody = Instance.new("TextLabel", hintF)
+    hintBody.Size              = UDim2.new(1, -8, 1, -26)
+    hintBody.Position          = UDim2.fromOffset(4, 24)
+    hintBody.BackgroundTransparency = 1
+    hintBody.TextColor3        = Color3.fromRGB(195, 220, 195)
+    hintBody.Font              = Enum.Font.Gotham
+    hintBody.TextSize          = 10
+    hintBody.TextXAlignment    = Enum.TextXAlignment.Left
+    hintBody.TextYAlignment    = Enum.TextYAlignment.Top
+    hintBody.TextWrapped       = true
+    hintBody.RichText          = true
+
+    updateHints = function()
+        hintBody.Text = table.concat({
+            "<b>START</b> → Menú mando",
+            "<b>SELECT</b> → Detener todo",
+            "<b>D↑</b>=Fly:" .. (GP.flyOn and "<b>ON</b>" or "OFF") ..
+            "  <b>D↓</b>=CMD",
+            "<b>D←/→</b>=WalkSpeed ∓16",
+            "<b>RT</b>=Agarrar  <b>LT</b>=Fling",
+            "<b>LB/RB</b>=Bajar/Subir (fly)",
+            "<b>X</b>=Ring  <b>Y</b>=Headless",
+            "<b>R3</b>=ESP:" .. (GP.espOn and "<b>ON</b>" or "OFF") ..
+            "  <b>L3</b>=Noclip",
+            "FlySpd:" .. GP.flySpeed ..
+            "  WalkSpd:" .. tostring(SavedConfig and SavedConfig.WalkSpeed or 16),
+        }, "\n")
+    end
+    updateHints()
+
+    -- ── Vuelo gamepad ─────────────────────────────────────────
+    -- Llama al manageFlight ORIGINAL (que ya fue parchado para leer _G.PULPI_GP_AXES)
+    startFly = function()
+        GP.flyOn = true
+        SavedConfig.FlyActive = false  -- forzar toggle
+        pcall(manageFlight, true)
+        showNotif("✈️ Vuelo ON\nLS=mover  LB=bajar  RB=subir")
+        updateHints()
+    end
+
+    stopFly = function()
+        GP.flyOn = false
+        pcall(manageFlight, false)
+        _G.PULPI_GP_AXES = {lx=0, ly=0, lb=false, rb=false}
+        showNotif("✈️ Vuelo OFF")
+        updateHints()
+    end
+
+    -- ── Definición del menú ───────────────────────────────────
+    -- NOTA: ahora las funciones ya están declaradas arriba → closures válidas
+    local ITEMS = {
+        { icon="🐙", label="MENÚ PULPI",
+          desc="Abrir/cerrar GUI principal",
+          action=function()
+              if typeof(_G.PULPI_toggleMenu)=="function" then _G.PULPI_toggleMenu() end
+          end },
+        { icon="✈️", label="VOLAR",
+          desc="LS=mover  LB=bajar  RB=subir",
+          toggle=function() return GP.flyOn end,
+          action=function()
+              if GP.flyOn then stopFly() else startFly() end
+          end },
+        { icon="⚡", label="FLY SPEED +10",
+          getDesc=function() return "FlySpeed: "..GP.flySpeed end,
+          action=function()
+              GP.flySpeed = math.min(GP.flySpeed+10, 800)
+              SavedConfig.FlySpeed = GP.flySpeed
+              pcall(SaveData)
+              updateHints()
+          end },
+        { icon="🐢", label="FLY SPEED -10",
+          getDesc=function() return "FlySpeed: "..GP.flySpeed end,
+          action=function()
+              GP.flySpeed = math.max(GP.flySpeed-10, 10)
+              SavedConfig.FlySpeed = GP.flySpeed
+              pcall(SaveData)
+              updateHints()
+          end },
+        { icon="👁",  label="ESP",
+          desc="Ver jugadores a través de paredes",
+          toggle=function() return GP.espOn end,
+          action=function()
+              GP.espOn = not GP.espOn
+              pcall(manageESP, GP.espOn)
+          end },
+        { icon="👻", label="NOCLIP",
+          desc="Atravesar paredes",
+          toggle=function() return GP.noclipOn end,
+          action=function()
+              GP.noclipOn = not GP.noclipOn
+              pcall(manageNoclip, GP.noclipOn)
+          end },
+        { icon="💀", label="FE HEADLESS",
+          desc="Quitar cabeza (efecto FE)",
+          toggle=function() return GP.headlessOn end,
+          action=function()
+              GP.headlessOn = not GP.headlessOn
+              pcall(toggleHeadlessFE, GP.headlessOn)
+          end },
+        { icon="🌀", label="RING / TORNADO",
+          desc="Activar Super Ring V4",
+          toggle=function() return GP.ringOn end,
+          action=function()
+              GP.ringOn = not GP.ringOn
+              pcall(toggleTornado)
+          end },
+        { icon="🔥", label="FLING (guía)",
+          desc="RT=agarrar  LT=lanzar (apunta cámara)",
+          action=function()
+              showNotif("RT = agarrar target\nLT = lanzar\nApunta con la cámara")
+          end },
+        { icon="🏃", label="WALK SPEED +16",
+          getDesc=function() return "WalkSpeed: "..(SavedConfig and SavedConfig.WalkSpeed or 16) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.WalkSpeed = math.min((SavedConfig.WalkSpeed or 16)+16, 400)
+                  pcall(applySpeedAndJump); pcall(SaveData)
+              end
+              updateHints()
+          end },
+        { icon="🐌", label="WALK SPEED -16",
+          getDesc=function() return "WalkSpeed: "..(SavedConfig and SavedConfig.WalkSpeed or 16) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.WalkSpeed = math.max((SavedConfig.WalkSpeed or 16)-16, 16)
+                  pcall(applySpeedAndJump); pcall(SaveData)
+              end
+              updateHints()
+          end },
+        { icon="🦘", label="JUMP POWER +50",
+          getDesc=function() return "JumpPower: "..(SavedConfig and SavedConfig.JumpPower or 50) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.JumpPower = math.min((SavedConfig.JumpPower or 50)+50, 500)
+                  pcall(applySpeedAndJump); pcall(SaveData)
+              end
+          end },
+        { icon="⬇️", label="JUMP POWER -50",
+          getDesc=function() return "JumpPower: "..(SavedConfig and SavedConfig.JumpPower or 50) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.JumpPower = math.max((SavedConfig.JumpPower or 50)-50, 50)
+                  pcall(applySpeedAndJump); pcall(SaveData)
+              end
+          end },
+        { icon="🪐", label="RING RADIO +50",
+          getDesc=function() return "Radio: "..(SavedConfig and SavedConfig.RingRadius or 50) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.RingRadius = math.min((SavedConfig.RingRadius or 50)+50,1000)
+                  pcall(SaveData)
+              end
+          end },
+        { icon="🔵", label="RING RADIO -50",
+          getDesc=function() return "Radio: "..(SavedConfig and SavedConfig.RingRadius or 50) end,
+          action=function()
+              if SavedConfig then
+                  SavedConfig.RingRadius = math.max((SavedConfig.RingRadius or 50)-50,5)
+                  pcall(SaveData)
+              end
+          end },
+        { icon="🖥", label="CMD TERMINAL",
+          desc="Abrir/cerrar terminal de comandos",
+          action=function()
+              if typeof(_G.PULPI_toggleCmd)=="function" then _G.PULPI_toggleCmd() end
+          end },
+        { icon="🗡", label="HUNT (panel)",
+          desc="Panel de caza (navegar con D-Pad)",
+          action=function() openHuntPanel() end },
+        { icon="🛑", label="DETENER TODO",
+          desc="Para fly, ESP, noclip, headless, ring, hunt",
+          action=function()
+              if GP.flyOn then stopFly() end
+              GP.espOn=false; pcall(manageESP,false)
+              GP.noclipOn=false; pcall(manageNoclip,false)
+              GP.headlessOn=false; pcall(toggleHeadlessFE,false)
+              if GP.ringOn then GP.ringOn=false; pcall(toggleTornado) end
+              pcall(stopHunt)
+              showNotif("Todo detenido ✓", Color3.fromRGB(255,220,60))
+              updateHints()
+          end },
+    }
+
+    -- ── Menú principal ────────────────────────────────────────
+    local menuF = Instance.new("Frame", gpGui)
+    menuF.Size             = UDim2.fromOffset(310, 470)
+    menuF.Position         = UDim2.fromScale(0.5, 0.5)
+    menuF.AnchorPoint      = Vector2.new(0.5, 0.5)
+    menuF.BackgroundColor3 = Color3.fromRGB(10, 12, 22)
+    menuF.BackgroundTransparency = 0.08
+    menuF.Visible          = false
+    menuF.BorderSizePixel  = 0
+    Instance.new("UICorner", menuF).CornerRadius = UDim.new(0, 16)
+    local mStroke = Instance.new("UIStroke", menuF)
+    mStroke.Color = Color3.fromRGB(90, 130, 255); mStroke.Thickness = 2
+    local mScale = Instance.new("UIScale", menuF); mScale.Scale = 0.9
+
+    local mTitle = Instance.new("TextLabel", menuF)
+    mTitle.Size             = UDim2.new(1,0,0,36)
+    mTitle.BackgroundTransparency = 1
+    mTitle.Text             = "🎮 PULPI — MANDO"
+    mTitle.TextColor3       = Color3.fromRGB(160,200,255)
+    mTitle.Font             = Enum.Font.GothamBlack
+    mTitle.TextSize         = 15
+    mTitle.TextXAlignment   = Enum.TextXAlignment.Center
+
+    local mSub = Instance.new("TextLabel", menuF)
+    mSub.Size              = UDim2.new(1,0,0,16)
+    mSub.Position          = UDim2.fromOffset(0,34)
+    mSub.BackgroundTransparency = 1
+    mSub.Text              = "↑↓ D-Pad  ·  A = Confirmar  ·  B = Cerrar"
+    mSub.TextColor3        = Color3.fromRGB(110,130,110)
+    mSub.Font              = Enum.Font.Gotham
+    mSub.TextSize          = 10
+    mSub.TextXAlignment    = Enum.TextXAlignment.Center
+
+    local mScroll = Instance.new("ScrollingFrame", menuF)
+    mScroll.Size                = UDim2.new(1,-14,1,-60)
+    mScroll.Position            = UDim2.fromOffset(7,54)
+    mScroll.BackgroundTransparency = 1
+    mScroll.BorderSizePixel     = 0
+    mScroll.ScrollBarThickness  = 4
+    mScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    mScroll.CanvasSize          = UDim2.fromScale(0,0)
+    local mLayout = Instance.new("UIListLayout", mScroll)
+    mLayout.Padding      = UDim.new(0,4)
+    mLayout.SortOrder    = Enum.SortOrder.LayoutOrder
+    mLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+    local mRows = {}
+    for i, item in ipairs(ITEMS) do
+        local row = Instance.new("Frame", mScroll)
+        row.Size             = UDim2.new(0.97,0,0,44)
+        row.BackgroundColor3 = Color3.fromRGB(22,26,40)
+        row.BackgroundTransparency = 0.3
+        row.BorderSizePixel  = 0
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+        local rs = Instance.new("UIStroke", row)
+        rs.Color = Color3.fromRGB(38,48,78); rs.Thickness = 1
+
+        local ic = Instance.new("TextLabel", row)
+        ic.Size  = UDim2.fromOffset(32,44); ic.Position = UDim2.fromOffset(4,0)
+        ic.BackgroundTransparency = 1; ic.Text = item.icon or "●"
+        ic.TextSize = 18; ic.Font = Enum.Font.GothamBold
+        ic.TextXAlignment = Enum.TextXAlignment.Center; ic.TextColor3 = Color3.new(1,1,1)
+
+        local nl = Instance.new("TextLabel", row)
+        nl.Size  = UDim2.new(1,-116,0,22); nl.Position = UDim2.fromOffset(40,4)
+        nl.BackgroundTransparency = 1; nl.Text = item.label
+        nl.TextColor3 = Color3.new(1,1,1); nl.Font = Enum.Font.GothamBold
+        nl.TextSize = 12; nl.TextXAlignment = Enum.TextXAlignment.Left
+        nl.TextWrapped = true; nl.ClipsDescendants = true
+
+        local dl = Instance.new("TextLabel", row)
+        dl.Size  = UDim2.new(1,-116,0,16); dl.Position = UDim2.fromOffset(40,26)
+        dl.BackgroundTransparency = 1
+        dl.Text = (item.getDesc and item.getDesc()) or item.desc or ""
+        dl.TextColor3 = Color3.fromRGB(130,155,130); dl.Font = Enum.Font.Gotham
+        dl.TextSize = 10; dl.TextXAlignment = Enum.TextXAlignment.Left
+        dl.TextWrapped = true; dl.ClipsDescendants = true
+
+        local badge = Instance.new("TextLabel", row)
+        badge.Size             = UDim2.fromOffset(36,20)
+        badge.Position         = UDim2.new(1,-42,0.5,-10)
+        badge.BackgroundColor3 = Color3.fromRGB(38,38,58)
+        badge.Text = ""; badge.TextColor3 = Color3.new(1,1,1)
+        badge.Font = Enum.Font.GothamBold; badge.TextSize = 10
+        badge.TextXAlignment = Enum.TextXAlignment.Center
+        Instance.new("UICorner", badge).CornerRadius = UDim.new(0,6)
+
+        mRows[i] = {frame=row, stroke=rs, badge=badge, descLbl=dl, item=item}
+    end
+
+    local function refreshMenu()
+        for i, r in ipairs(mRows) do
+            local sel = (i == GP.selIdx)
+            r.frame.BackgroundColor3 = sel and Color3.fromRGB(38,58,118) or Color3.fromRGB(22,26,40)
+            r.frame.BackgroundTransparency = sel and 0 or 0.3
+            r.stroke.Color = sel and Color3.fromRGB(110,155,255) or Color3.fromRGB(38,48,78)
+            r.stroke.Thickness = sel and 2 or 1
+            local it = r.item
+            if it.toggle then
+                local on = it.toggle()
+                r.badge.Text = on and "ON" or "OFF"
+                r.badge.BackgroundColor3 = on and Color3.fromRGB(28,112,46) or Color3.fromRGB(96,26,26)
+            else
+                r.badge.Text = ""; r.badge.BackgroundColor3 = Color3.fromRGB(38,38,58)
+            end
+            if it.getDesc then r.descLbl.Text = it.getDesc() end
+        end
+        -- auto-scroll
+        local iH = 48
+        local sY = (GP.selIdx-1)*iH
+        local vis = mScroll.AbsoluteSize.Y
+        local cur = mScroll.CanvasPosition.Y
+        if sY < cur then mScroll.CanvasPosition = Vector2.new(0,sY)
+        elseif sY+44 > cur+vis then mScroll.CanvasPosition = Vector2.new(0, sY+44-vis) end
+    end
+
+    local menuAnimC = nil
+    local function toggleMenu()
+        GP.menuOpen = not GP.menuOpen
+        menuF.Visible = true
+        if menuAnimC then menuAnimC:Disconnect() end
+        local tgtScale = GP.menuOpen and 1 or 0.88
+        local tgtAlpha = GP.menuOpen and 0.08 or 1
+        local elapsed = 0; local s0 = mScale.Scale; local a0 = menuF.BackgroundTransparency
+        menuAnimC = RunService.Heartbeat:Connect(function(dt)
+            elapsed = elapsed + dt
+            local t = math.min(elapsed/0.20, 1)
+            local e = GP.menuOpen and 1-(1-t)^3 or t^3
+            mScale.Scale = s0+(tgtScale-s0)*e
+            menuF.BackgroundTransparency = a0+(tgtAlpha-a0)*e
+            if t >= 1 then
+                menuAnimC:Disconnect()
+                if not GP.menuOpen then menuF.Visible = false end
+            end
+        end)
+        if GP.menuOpen then
+            refreshMenu()
+            showNotif("↑↓=navegar  A=OK  B=cerrar  START=toggle")
+        end
+    end
+
+    -- ── Panel de Hunt para mando ──────────────────────────────
+    local huntF = Instance.new("Frame", gpGui)
+    huntF.Size             = UDim2.fromOffset(255, 310)
+    huntF.Position         = UDim2.fromScale(0.5, 0.5)
+    huntF.AnchorPoint      = Vector2.new(0.5, 0.5)
+    huntF.BackgroundColor3 = Color3.fromRGB(18,8,8)
+    huntF.BackgroundTransparency = 0.1
+    huntF.Visible          = false
+    huntF.BorderSizePixel  = 0
+    Instance.new("UICorner", huntF).CornerRadius = UDim.new(0,14)
+    local hkS = Instance.new("UIStroke", huntF)
+    hkS.Color = Color3.fromRGB(220,50,50); hkS.Thickness = 2
+
+    local hkTitle = Instance.new("TextLabel", huntF)
+    hkTitle.Size             = UDim2.new(1,0,0,32); hkTitle.BackgroundTransparency = 1
+    hkTitle.Text             = "🗡 HUNT — Selecciona víctima"
+    hkTitle.TextColor3       = Color3.fromRGB(255,100,100)
+    hkTitle.Font             = Enum.Font.GothamBold; hkTitle.TextSize = 12
+    hkTitle.TextXAlignment   = Enum.TextXAlignment.Center
+
+    local hkSub = Instance.new("TextLabel", huntF)
+    hkSub.Size = UDim2.new(1,0,0,14); hkSub.Position = UDim2.fromOffset(0,30)
+    hkSub.BackgroundTransparency = 1; hkSub.Text = "↑↓ D-Pad  ·  A=Cazar  ·  B=Cancelar  ·  Y=Stop"
+    hkSub.TextColor3 = Color3.fromRGB(180,120,120); hkSub.Font = Enum.Font.Gotham; hkSub.TextSize = 10
+    hkSub.TextXAlignment = Enum.TextXAlignment.Center
+
+    local hkScroll = Instance.new("ScrollingFrame", huntF)
+    hkScroll.Size = UDim2.new(1,-10,1,-90); hkScroll.Position = UDim2.fromOffset(5,50)
+    hkScroll.BackgroundTransparency = 1; hkScroll.BorderSizePixel = 0
+    hkScroll.ScrollBarThickness = 3; hkScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    hkScroll.CanvasSize = UDim2.fromScale(0,0)
+    local hkLayout = Instance.new("UIListLayout", hkScroll)
+    hkLayout.Padding = UDim.new(0,4)
+    hkLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+    local hkStopBtn = Instance.new("TextButton", huntF)
+    hkStopBtn.Size = UDim2.new(0.88,0,0,28); hkStopBtn.Position = UDim2.new(0.06,0,1,-34)
+    hkStopBtn.BackgroundColor3 = Color3.fromRGB(36,140,36); hkStopBtn.Text = "🟢 DETENER CAZA"
+    hkStopBtn.TextColor3 = Color3.new(1,1,1); hkStopBtn.Font = Enum.Font.GothamBold; hkStopBtn.TextSize = 12
+    Instance.new("UICorner", hkStopBtn).CornerRadius = UDim.new(0,8)
+    hkStopBtn.MouseButton1Click:Connect(function()
+        pcall(stopHunt); huntF.Visible = false
+        showNotif("Caza detenida.", Color3.fromRGB(80,200,80))
+    end)
+
+    local hkSel = 1; local hkPlayers = {}; local hkRows = {}; local huntOpen = false
+
+    local function rebuildHuntRows()
+        for _, c in pairs(hkScroll:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
+        hkRows = {}; hkPlayers = {}
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= lplr then
+                table.insert(hkPlayers, p)
+                local row = Instance.new("Frame", hkScroll)
+                row.Size = UDim2.new(0.96,0,0,36)
+                row.BackgroundColor3 = Color3.fromRGB(48,18,18)
+                row.BackgroundTransparency = 0.3; row.BorderSizePixel = 0
+                Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+                local rs2 = Instance.new("UIStroke", row); rs2.Color = Color3.fromRGB(110,28,28); rs2.Thickness = 1
+                local lbl2 = Instance.new("TextLabel", row)
+                lbl2.Size = UDim2.fromScale(1,1); lbl2.BackgroundTransparency = 1
+                lbl2.Text = "🎯 " .. p.DisplayName .. " (@" .. p.Name .. ")"
+                lbl2.TextColor3 = Color3.new(1,1,1); lbl2.Font = Enum.Font.GothamSemibold
+                lbl2.TextSize = 12; lbl2.TextXAlignment = Enum.TextXAlignment.Center
+                table.insert(hkRows, {frame=row, stroke=rs2})
+            end
+        end
+        hkSel = 1
+    end
+
+    local function refreshHuntVis()
+        for i, r in ipairs(hkRows) do
+            if i == hkSel then
+                r.frame.BackgroundColor3 = Color3.fromRGB(115,28,28)
+                r.frame.BackgroundTransparency = 0
+                r.stroke.Color = Color3.fromRGB(255,78,78)
+            else
+                r.frame.BackgroundColor3 = Color3.fromRGB(48,18,18)
+                r.frame.BackgroundTransparency = 0.3
+                r.stroke.Color = Color3.fromRGB(110,28,28)
+            end
+        end
+    end
+
+    openHuntPanel = function()
+        huntOpen = true; huntF.Visible = true
+        rebuildHuntRows(); refreshHuntVis()
+        showNotif("Hunt abierto\n↑↓=elegir  A=cazar  B=cerrar", Color3.fromRGB(220,80,80))
+    end
+
+    -- ── Fling con mando ───────────────────────────────────────
+    local gpGrabActive = false; local gpGrabTarget = nil
+    local gpGrabGhost  = nil;   local gpGrabConn   = nil
+    local gpIgnore     = Instance.new("Folder", workspace)
+    gpIgnore.Name = "PULPI_GP2_IGN"
+
+    local function gpAimTarget()
+        local vp = cam.ViewportSize
+        local ray = cam:ViewportPointToRay(vp.X/2, vp.Y/2)
+        local p = RaycastParams.new()
+        p.FilterDescendantsInstances = {lplr.Character, gpIgnore}
+        p.FilterType = Enum.RaycastFilterType.Blacklist
+        local hit = workspace:Raycast(ray.Origin, ray.Direction*900, p)
+        if hit and hit.Instance then
+            local m = hit.Instance:FindFirstAncestorOfClass("Model")
+            if m and m:FindFirstChild("Humanoid") and m:FindFirstChild("HumanoidRootPart") then
+                return m.HumanoidRootPart
+            end
+            return hit.Instance
+        end
+    end
+
+    local function gpGrab()
+        if gpGrabActive then return end
+        local part = gpAimTarget()
+        if not part or not part:IsA("BasePart") then
+            showNotif("Nada bajo el cursor", Color3.fromRGB(255,180,60)); return
+        end
+        gpGrabActive = true; gpGrabTarget = part
+        if gpGrabGhost then gpGrabGhost:Destroy() end
+        gpGrabGhost = part:Clone(); gpGrabGhost:ClearAllChildren()
+        gpGrabGhost.Anchored = true; gpGrabGhost.CanCollide = false
+        gpGrabGhost.Transparency = 0.5; gpGrabGhost.Material = Enum.Material.ForceField
+        gpGrabGhost.Color = Color3.fromRGB(100,200,255); gpGrabGhost.Parent = gpIgnore
+        if gpGrabConn then gpGrabConn:Disconnect() end
+        gpGrabConn = RunService.RenderStepped:Connect(function()
+            if gpGrabGhost and gpGrabGhost.Parent then
+                gpGrabGhost.CFrame = CFrame.new(cam.CFrame.Position + cam.CFrame.LookVector*15)
+            end
+        end)
+        showNotif("🎯 Agarrado!\nLT = Lanzar  ·  B = Soltar", Color3.fromRGB(100,180,255))
+    end
+
+    local function gpRelease()
+        gpGrabActive = false; gpGrabTarget = nil
+        if gpGrabConn then gpGrabConn:Disconnect(); gpGrabConn = nil end
+        if gpGrabGhost then gpGrabGhost:Destroy(); gpGrabGhost = nil end
+    end
+
+    local function gpFling()
+        if not gpGrabActive or not gpGrabTarget then return end
+        local target = gpGrabTarget
+        gpRelease()
+        if target.Anchored then return end
+        local char = lplr.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local oldCF = root.CFrame
+        local bv = Instance.new("BodyVelocity", root)
+        bv.MaxForce = Vector3.new(math.huge,math.huge,math.huge); bv.Velocity = Vector3.zero
+        local ba = Instance.new("BodyAngularVelocity", root)
+        ba.MaxTorque = Vector3.new(math.huge,math.huge,math.huge)
+        ba.AngularVelocity = Vector3.new(0, 100*100*math.pi, 0)
+        local fp = {}
+        for _, v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then table.insert(fp,v) end end
+        local nc = RunService.Stepped:Connect(function()
+            for _, v in ipairs(fp) do if v and v.Parent then v.CanCollide = false end end
+        end)
+        pcall(function() root.CFrame = CFrame.new(oldCF.Position + Vector3.new(0,500,0)) end)
+        task.wait(0.1)
+        local t0 = tick()
+        local lc; lc = RunService.Heartbeat:Connect(function()
+            if tick()-t0 > 1 or not target.Parent then
+                lc:Disconnect(); nc:Disconnect()
+                pcall(function() bv:Destroy(); ba:Destroy() end)
+                pcall(function() root.CFrame = oldCF end)
+                for _, v in ipairs(fp) do if v and v.Parent then v.CanCollide = true end end
+            else
+                pcall(function() root.CFrame = target.CFrame end)
+            end
+        end)
+        showNotif("🔥 ¡FLING!", Color3.fromRGB(255,80,80))
+    end
+
+    -- ── Loop principal del mando (Heartbeat) ──────────────────
+    local dHold = {up=0, down=0, delay=0.38, rate=0.11}
+    local ldU, ldD = false, false
+    local rtWas, ltWas = false, false
+
+    RunService.Heartbeat:Connect(function(dt)
+        if not hasGP() then return end
+
+        local axes = readAxes()
+        local lx = math.abs(axes.lx) > GP.dz and axes.lx or 0
+        local ly = math.abs(axes.ly) > GP.dz and axes.ly or 0
+
+        -- Actualizar tabla compartida para el fly parchado
+        local isLB = UIS:IsKeyDown(Enum.KeyCode.ButtonL1)
+        local isRB = UIS:IsKeyDown(Enum.KeyCode.ButtonR1)
+        _G.PULPI_GP_AXES = {lx=lx, ly=ly, lb=isLB, rb=isRB}
+
+        -- RT → grab
+        local rtHeld = axes.rt > 0.55
+        if rtHeld and not rtWas and not GP.menuOpen then gpGrab() end
+        rtWas = rtHeld
+
+        -- LT → fling
+        local ltHeld = axes.lt > 0.55
+        if ltHeld and not ltWas and not GP.menuOpen then gpFling() end
+        ltWas = ltHeld
+
+        -- D-Pad en menú con hold-repeat
+        if GP.menuOpen then
+            local dU = UIS:IsKeyDown(Enum.KeyCode.DPadUp)
+            local dD = UIS:IsKeyDown(Enum.KeyCode.DPadDown)
+            if dU then
+                if not ldU then GP.selIdx = math.max(1, GP.selIdx-1); dHold.up=0; refreshMenu()
+                else
+                    dHold.up = dHold.up + dt
+                    if dHold.up > dHold.delay then
+                        dHold.up = dHold.delay - dHold.rate
+                        GP.selIdx = math.max(1, GP.selIdx-1); refreshMenu()
+                    end
+                end
+            else dHold.up = 0 end
+            if dD then
+                if not ldD then GP.selIdx = math.min(#ITEMS, GP.selIdx+1); dHold.down=0; refreshMenu()
+                else
+                    dHold.down = dHold.down + dt
+                    if dHold.down > dHold.delay then
+                        dHold.down = dHold.delay - dHold.rate
+                        GP.selIdx = math.min(#ITEMS, GP.selIdx+1); refreshMenu()
+                    end
+                end
+            else dHold.down = 0 end
+            ldU = dU; ldD = dD
+        end
+
+        -- D-Pad en hunt
+        if huntOpen and huntF.Visible and not GP.menuOpen then
+            local dU = UIS:IsKeyDown(Enum.KeyCode.DPadUp)
+            local dD = UIS:IsKeyDown(Enum.KeyCode.DPadDown)
+            if dU and not ldU then hkSel = math.max(1, hkSel-1); refreshHuntVis() end
+            if dD and not ldD then hkSel = math.min(#hkPlayers, hkSel+1); refreshHuntVis() end
+            ldU = dU; ldD = dD
+        end
+    end)
+
+    -- ── Botones (InputBegan) ──────────────────────────────────
+    UIS.InputBegan:Connect(function(input, gpe)
+        if input.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
+        local kc = input.KeyCode
+
+        -- START → toggle menú
+        if kc == Enum.KeyCode.ButtonStart then
+            if huntOpen and huntF.Visible then
+                huntF.Visible = false; huntOpen = false
+            else
+                toggleMenu()
+            end
+            return
+        end
+
+        -- SELECT → detener todo
+        if kc == Enum.KeyCode.ButtonSelect then
+            if GP.flyOn then stopFly() end
+            GP.espOn=false; pcall(manageESP,false)
+            GP.noclipOn=false; pcall(manageNoclip,false)
+            GP.headlessOn=false; pcall(toggleHeadlessFE,false)
+            if GP.ringOn then GP.ringOn=false; pcall(toggleTornado) end
+            pcall(stopHunt); gpRelease()
+            showNotif("SELECT → Todo detenido ✓", Color3.fromRGB(255,220,60))
+            updateHints(); refreshMenu()
+            return
+        end
+
+        -- A → confirmar
+        if kc == Enum.KeyCode.ButtonA then
+            if GP.menuOpen then
+                local item = ITEMS[GP.selIdx]
+                if item and item.action then item.action(); refreshMenu() end
+            elseif huntOpen and huntF.Visible then
+                local p = hkPlayers[hkSel]
+                if p then
+                    pcall(startHunt, p)
+                    huntF.Visible = false; huntOpen = false
+                    showNotif("🗡 Cazando: " .. p.Name, Color3.fromRGB(255,80,80))
+                end
+            elseif gpGrabActive then
+                gpFling()
+            end
+            return
+        end
+
+        -- B → cerrar / cancelar
+        if kc == Enum.KeyCode.ButtonB then
+            if GP.menuOpen then toggleMenu()
+            elseif huntOpen and huntF.Visible then huntF.Visible = false; huntOpen = false
+            elseif gpGrabActive then gpRelease(); showNotif("Agarre cancelado")
+            end
+            return
+        end
+
+        -- X → Ring
+        if kc == Enum.KeyCode.ButtonX and not GP.menuOpen then
+            GP.ringOn = not GP.ringOn
+            pcall(toggleTornado)
+            showNotif("🌀 Ring: " .. (GP.ringOn and "ON" or "OFF"))
+            return
+        end
+
+        -- Y → Headless / Stop hunt
+        if kc == Enum.KeyCode.ButtonY and not GP.menuOpen then
+            if huntOpen and huntF.Visible then
+                pcall(stopHunt); huntF.Visible=false; huntOpen=false
+                showNotif("Caza detenida ✓", Color3.fromRGB(80,200,80))
+            else
+                GP.headlessOn = not GP.headlessOn
+                pcall(toggleHeadlessFE, GP.headlessOn)
+                showNotif("💀 Headless: " .. (GP.headlessOn and "ON" or "OFF"))
+            end
+            return
+        end
+
+        -- R3 → ESP
+        if kc == Enum.KeyCode.ButtonR3 and not GP.menuOpen then
+            GP.espOn = not GP.espOn
+            pcall(manageESP, GP.espOn)
+            showNotif("👁 ESP: " .. (GP.espOn and "ON" or "OFF"))
+            updateHints()
+            return
+        end
+
+        -- L3 → Noclip
+        if kc == Enum.KeyCode.ButtonL3 and not GP.menuOpen then
+            GP.noclipOn = not GP.noclipOn
+            pcall(manageNoclip, GP.noclipOn)
+            showNotif("👻 Noclip: " .. (GP.noclipOn and "ON" or "OFF"))
+            updateHints()
+            return
+        end
+
+        -- LB en menú → subir item
+        if kc == Enum.KeyCode.ButtonL1 and GP.menuOpen then
+            GP.selIdx = math.max(1, GP.selIdx-1); refreshMenu(); return
+        end
+        -- RB en menú → bajar item
+        if kc == Enum.KeyCode.ButtonR1 and GP.menuOpen then
+            GP.selIdx = math.min(#ITEMS, GP.selIdx+1); refreshMenu(); return
+        end
+
+        -- D-Pad fuera de menú
+        if not GP.menuOpen and not huntF.Visible then
+            if kc == Enum.KeyCode.DPadUp then
+                if GP.flyOn then stopFly() else startFly() end
+            elseif kc == Enum.KeyCode.DPadDown then
+                if typeof(_G.PULPI_toggleCmd)=="function" then _G.PULPI_toggleCmd() end
+            elseif kc == Enum.KeyCode.DPadLeft then
+                if SavedConfig then
+                    SavedConfig.WalkSpeed = math.max((SavedConfig.WalkSpeed or 16)-16, 16)
+                    pcall(applySpeedAndJump); pcall(SaveData)
+                    showNotif("WalkSpeed: " .. SavedConfig.WalkSpeed)
+                end
+            elseif kc == Enum.KeyCode.DPadRight then
+                if SavedConfig then
+                    SavedConfig.WalkSpeed = math.min((SavedConfig.WalkSpeed or 16)+16, 400)
+                    pcall(applySpeedAndJump); pcall(SaveData)
+                    showNotif("WalkSpeed: " .. SavedConfig.WalkSpeed)
+                end
+            end
+        end
+    end)
+
+    -- ── Resync al respawnear ──────────────────────────────────
+    lplr.CharacterAdded:Connect(function()
+        GP.flyOn = false
+        _G.PULPI_GP_AXES = {lx=0, ly=0, lb=false, rb=false}
+        gpRelease()
+        GP.espOn      = SavedConfig and SavedConfig.ESPActive or false
+        GP.noclipOn   = SavedConfig and SavedConfig.NoclipActive or false
+        GP.headlessOn = SavedConfig and SavedConfig.HeadlessActive or false
+        task.wait(1); pcall(refreshMenu); updateHints()
+    end)
+
+    -- ── Sincronizar estado inicial ────────────────────────────
+    task.wait(0.5)
+    GP.espOn      = SavedConfig and SavedConfig.ESPActive or false
+    GP.noclipOn   = SavedConfig and SavedConfig.NoclipActive or false
+    GP.headlessOn = SavedConfig and SavedConfig.HeadlessActive or false
+    GP.flyOn      = false
+    GP.flySpeed   = SavedConfig and SavedConfig.FlySpeed or 65
+    refreshMenu()
+
+    -- ── Actualizar hints cada 2s ──────────────────────────────
+    task.spawn(function()
+        while true do task.wait(2); updateHints() end
+    end)
+
+    -- ── Mensaje de bienvenida ─────────────────────────────────
+    task.wait(1)
+    showNotif(
+        "🎮 Mando detectado!\n" ..
+        "START=Menú  SELECT=Stop todo\n" ..
+        "D↑=Fly  D↓=CMD  D←/→=Speed\n" ..
+        "RT=Agarrar  LT=Fling\n" ..
+        "R3=ESP  L3=Noclip  X=Ring  Y=Headless",
+        Color3.fromRGB(100, 160, 255)
+    )
+
+    print("🎮 PULPI GAMEPAD v2.0 cargado — Xbox/PS4/PS5")
+end)
+-- ============================================================
+-- FIN ADDON GAMEPAD v2.0
+-- ============================================================
