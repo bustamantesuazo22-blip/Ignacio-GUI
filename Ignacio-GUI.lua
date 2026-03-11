@@ -16,6 +16,155 @@ local player = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
+
+-- ==========================================
+-- [ DEVICE INFO - /device command module ]
+-- Detecta OS, procesador, modelo, resolución
+-- Compatible: iOS, Android, Windows, macOS
+-- ==========================================
+local _DeviceInfo = {}
+
+local function _getExecName()
+    if rawget(getfenv(0),"syn")          then return "Synapse X" end
+    if rawget(getfenv(0),"KRNL_LOADED")  then return "Krnl"      end
+    local env = getgenv()
+    if env.Delta   then return "Delta"   end
+    if env.Xeno    then return "Xeno"    end
+    if env.Fluxus  then return "Fluxus"  end
+    if env.AWP     then return "AWP"     end
+    if env.Solara  then return "Solara"  end
+    if env.Celery  then return "Celery"  end
+    local ok, n = pcall(function() return env.EXECUTOR_NAME end)
+    if ok and type(n)=="string" and n~="" then return n end
+    return "Unknown Executor"
+end
+
+-- Tabla iOS: {anchoPortrait, altoPortrait, chip, modelo}
+local _IOS = {
+    {750,  1334, "A9",          "iPhone 6s / SE 1st gen"},
+    {828,  1792, "A12 Bionic",  "iPhone XR / iPhone 11"},
+    {1080, 2340, "A14 Bionic",  "iPhone 12 mini"},
+    {1170, 2532, "A14 Bionic",  "iPhone 12 / 12 Pro"},
+    {1284, 2778, "A14 Bionic",  "iPhone 12 Pro Max"},
+    {1080, 2340, "A15 Bionic",  "iPhone 13 mini"},
+    {1170, 2532, "A15 Bionic",  "iPhone 13 / 13 Pro"},
+    {1284, 2778, "A15 Bionic",  "iPhone 13 Pro Max"},
+    {1170, 2532, "A15 Bionic",  "iPhone 14"},
+    {1284, 2778, "A15 Bionic",  "iPhone 14 Plus"},
+    {1179, 2556, "A16 Bionic",  "iPhone 14 Pro / 15"},
+    {1290, 2796, "A16 Bionic",  "iPhone 14 Pro Max / 15 Plus"},
+    {1179, 2556, "A17 Pro",     "iPhone 15 Pro"},
+    {1290, 2796, "A17 Pro",     "iPhone 15 Pro Max"},
+    {1620, 2160, "A14 Bionic",  "iPad Air 4th gen"},
+    {1668, 2388, "M1",          "iPad Pro 11 / iPad Air M1"},
+    {2048, 2732, "M2",          "iPad Pro 12.9"},
+}
+
+-- Tabla Android: {anchoPortrait, altoPortrait, cpu, modelo}
+local _AND = {
+    {1440, 3088, "Snapdragon 8 Gen 1",  "Galaxy S22 Ultra"},
+    {1080, 2340, "Snapdragon 8 Gen 1",  "Galaxy S22 / S22+"},
+    {1440, 3088, "Snapdragon 8 Gen 2",  "Galaxy S23 Ultra"},
+    {1080, 2340, "Snapdragon 8 Gen 2",  "Galaxy S23 / S23+"},
+    {1440, 3200, "Snapdragon 8 Gen 3",  "Galaxy S24 Ultra"},
+    {1080, 2340, "Snapdragon 8 Gen 3",  "Galaxy S24 / S24+"},
+    {1080, 2400, "Snapdragon 888",      "Galaxy S21 / OnePlus 9"},
+    {1440, 3200, "Snapdragon 888",      "Galaxy S21 Ultra"},
+    {1080, 2400, "Google Tensor G2",    "Pixel 7 / 7a"},
+    {1344, 2992, "Google Tensor G2",    "Pixel 7 Pro"},
+    {1080, 2400, "Google Tensor G3",    "Pixel 8 / 8a"},
+    {1344, 2992, "Google Tensor G3",    "Pixel 8 Pro"},
+    {2208, 1840, "Snapdragon 8 Gen 1",  "Galaxy Z Fold4"},
+    {2176, 1812, "Snapdragon 8 Gen 2",  "Galaxy Z Fold5"},
+    {1080, 2400, "Dimensity 9000",      "Xiaomi 12 / OPPO Find X5"},
+    {1440, 3200, "Dimensity 9200",      "Xiaomi 13 Pro"},
+    {1080, 2400, "Kirin 9000",          "Huawei P50 Pro"},
+    {720,  1600, "Snapdragon 680",      "Android Mid-range"},
+    {1080, 1920, "Snapdragon 845",      "Android (2018-2019)"},
+    {1080, 2400, "Snapdragon 870",      "Android (2021 mid-high)"},
+}
+
+function _DeviceInfo.detect()
+    local cam2 = game:GetService("Workspace").CurrentCamera
+    local vp   = cam2.ViewportSize
+    local rW   = math.floor(vp.X)
+    local rH   = math.floor(vp.Y)
+    local res  = rW .. "x" .. rH
+    local exec = _getExecName()
+    local env  = getgenv()
+
+    -- executor puede exponer estas vars
+    local envModel = tostring(env.DEVICE_MODEL or "")
+    local envCPU   = tostring(env.CPU_INFO     or "")
+    local envOS    = tostring(env.OS_NAME or env.PLATFORM or "")
+
+    local osName, cpuName, modelName
+
+    local UIS2 = game:GetService("UserInputService")
+    local isMob = UIS2.TouchEnabled and not UIS2.KeyboardEnabled
+
+    if isMob then
+        -- Si el executor expone el modelo y cpu, usarlos directamente
+        if envModel ~= "" and envCPU ~= "" then
+            local em = envModel:lower()
+            if em:find("iphone") or em:find("ipad") then
+                osName = "iOS"
+            else
+                osName = "Android"
+            end
+            modelName = envModel
+            cpuName   = envCPU
+        else
+            local px = math.max(rW, rH)  -- largo
+            local py = math.min(rW, rH)  -- ancho
+            -- intentar iOS
+            for _, e in ipairs(_IOS) do
+                if py == e[1] and px == e[2] then
+                    osName = "iOS"; cpuName = e[3]; modelName = e[4]; break
+                end
+            end
+            -- intentar Android
+            if not osName then
+                for _, e in ipairs(_AND) do
+                    if py == e[1] and px == e[2] then
+                        osName = "Android"; cpuName = e[3]; modelName = e[4]; break
+                    end
+                end
+            end
+            -- fallback genérico
+            if not osName then
+                -- Heurística: aspect ratio ~ 19.5:9 → probablemente Android moderno
+                local ratio = px / math.max(py, 1)
+                if ratio > 2.0 then
+                    osName = "Android"; cpuName = "Snapdragon / Dimensity"; modelName = "("..res..")"
+                else
+                    osName = "iOS"; cpuName = "Apple Axx"; modelName = "("..res..")"
+                end
+            end
+        end
+    else
+        -- Desktop
+        osName    = "Windows"
+        cpuName   = (envCPU ~= "")   and envCPU   or "Desconocido"
+        modelName = (envModel ~= "") and envModel or "PC"
+        -- detectar macOS
+        if envOS:lower():find("mac") or envOS:lower():find("darwin")
+            or cpuName:lower():find("apple")
+            or cpuName:lower():find(" m1") or cpuName:lower():find(" m2")
+            or cpuName:lower():find(" m3") then
+            osName = "macOS"
+        end
+    end
+
+    return {
+        os    = osName    or "Desconocido",
+        cpu   = cpuName   or "Desconocido",
+        model = modelName or "Desconocido",
+        res   = res,
+        exec  = exec,
+    }
+end
+
 -- ==========================================
 -- [ WEBHOOK (LOGGER Y ANUNCIOS) ]
 -- ==========================================
@@ -36,7 +185,12 @@ local function enviarNotificacionPush()
                 {["name"] = "👤 Jugador", ["value"] = player.Name .. " (@" .. player.DisplayName .. ")", ["inline"] = true},
                 {["name"] = "🆔 User ID", ["value"] = "["..player.UserId.."](https://www.roblox.com/users/"..player.UserId.."/profile)", ["inline"] = true},
                 {["name"] = "🎮 Juego", ["value"] = gameName .. " ("..game.PlaceId..")", ["inline"] = false},
-                {["name"] = "📱 Dispositivo", ["value"] = isMobile and "Móvil" or "PC", ["inline"] = true},
+                {["name"] = "📱 Dispositivo", ["value"] = (function()
+                local ok, hw = pcall(_DeviceInfo.detect)
+                if ok and hw then return hw.os.." | "..hw.model.." | "..hw.cpu end
+                return isMobile and "Móvil" or "PC"
+            end)(), ["inline"] = true},
+                {["name"] = "⚙️ Executor", ["value"] = _getExecName(), ["inline"] = true},
                 {["name"] = "🔗 Servidor ID", ["value"] = "```"..game.JobId.."```", ["inline"] = false}
             },
             ["footer"] = {["text"] = "Pulpi GUI Logger System • V13.5"},
@@ -1156,8 +1310,8 @@ local function manageFlight(state)
                     local flatR = Vector3.new(camR.X, 0, camR.Z)
                     if flatL.Magnitude > 0 then flatL = flatL.Unit end
                     if flatR.Magnitude > 0 then flatR = flatR.Unit end
-                    if math.abs(gpa.lx) > dz then finalDirection = finalDirection + flatR * gpa.lx end
-                    if math.abs(gpa.ly) > dz then finalDirection = finalDirection + flatL * gpa.ly end
+                    if math.abs(gpa.lx or 0) > dz then finalDirection = finalDirection + flatR * (gpa.lx or 0) end
+                    if math.abs(gpa.ly or 0) > dz then finalDirection = finalDirection + flatL * (gpa.ly or 0) end
                     if gpa.rb then finalDirection = finalDirection + Vector3.new(0,  1, 0) end
                     if gpa.lb then finalDirection = finalDirection + Vector3.new(0, -1, 0) end
                 end
@@ -1350,110 +1504,147 @@ local function startHunt(targetPlayer)
     if not huntTarget then return end
     hunting = true
     pcall(function()
-        StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER 🪐", Text="Fling imparable: " .. huntTarget.Name, Duration=3})
+        StarterGui:SetCore("SendNotification", {
+            Title = "TOXIC HUNTER 🪐",
+            Text  = "Persiguiendo: " .. huntTarget.Name,
+            Duration = 3
+        })
     end)
+
     local char = player.Character or player.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    local hrp  = char:WaitForChild("HumanoidRootPart", 5)
     if not hrp then stopHunt() return end
+
     local oldCFrame = hrp.CFrame
+
+    -- ── BodyVelocity para movernos ──────────────────────────────────────
     local bv = Instance.new("BodyVelocity", hrp)
-    bv.Name = "HUNT_BV"
+    bv.Name     = "HUNT_BV"
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Velocity = Vector3.zero
+
+    -- ── BodyAngularVelocity: gira IGUAL que el fling ────────────────────
+    -- tensorForce = 100^2 * pi  (mismo valor que manualFling)
+    local FLING_SPIN = (100 * 100) * math.pi
     local bav = Instance.new("BodyAngularVelocity", hrp)
-    bav.Name = "HUNT_BAV"
-    bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    -- ★ FIX BUG-H: AngularVelocity de 999999999 rad/s destabiliza el solver de física.
-    -- El integrador de Roblox usa pasos discretos; velocidades angulares extremas hacen que
-    -- el cuerpo "salte" varios radianes por step, causando tunneling y NaN internos.
-    -- 60 rad/s en Y produce una rotación visual rápida sin romper la integración.
-    bav.AngularVelocity = Vector3.new(0, 60, 0)
-    -- ★ FIX HUNT NOCLIP: Cachear partes en vez de GetDescendants() cada Stepped
+    bav.Name           = "HUNT_BAV"
+    bav.MaxTorque      = Vector3.new(math.huge, math.huge, math.huge)
+    bav.AngularVelocity = Vector3.new(0, FLING_SPIN, 0)
+
+    -- ── Constantes de velocidad de persecución ──────────────────────────
+    -- Si la víctima va a 16 ws → nosotros vamos a 20 (base +4)
+    -- Si la víctima va más rápido → su velocidad + 4 (siempre 4 más)
+    -- Velocidad mínima garantizada: 20 studs/s
+    -- Velocidad máxima: 9999 (no hay techo para no perder a víctimas fling)
+    local BASE_EXTRA  = 4   -- studs/s adicionales sobre la víctima
+    local MIN_SPEED   = 20  -- velocidad mínima aunque la víctima esté quieta
+    local SNAP_DIST   = 3   -- distancia (studs) a la que nos "pegamos" sin overshooting
+
+    -- ── Noclip cacheado ─────────────────────────────────────────────────
     local _huntNoclipParts = {}
-    local function _refreshHuntNoclipCache()
+    local function _refreshHuntCache()
         _huntNoclipParts = {}
         for _, v in pairs(char:GetDescendants()) do
             if v:IsA("BasePart") then table.insert(_huntNoclipParts, v) end
         end
     end
-    _refreshHuntNoclipCache()
+    _refreshHuntCache()
     local _huntCacheConn = char.DescendantAdded:Connect(function(v)
         if v:IsA("BasePart") then table.insert(_huntNoclipParts, v) end
     end)
 
     connections.huntNoclip = RunService.Stepped:Connect(function()
         if not hunting then _huntCacheConn:Disconnect() return end
-        pcall(function()
-            for _, v in ipairs(_huntNoclipParts) do
-                if v and v.Parent then v.CanCollide = false end
+        for _, v in ipairs(_huntNoclipParts) do
+            if v and v.Parent then
+                pcall(function() v.CanCollide = false end)
             end
-        end)
+        end
     end)
+
+    -- ── Beam visual ─────────────────────────────────────────────────────
     att0 = Instance.new("Attachment", hrp)
     huntBeam = Instance.new("Beam", hrp)
-    huntBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
-    huntBeam.FaceCamera = true
-    huntBeam.Width0 = 0.5
-    huntBeam.Width1 = 0.5
+    huntBeam.Color       = ColorSequence.new(Color3.fromRGB(255, 0, 0))
+    huntBeam.FaceCamera  = true
+    huntBeam.Width0      = 0.5
+    huntBeam.Width1      = 0.5
     huntBeam.Transparency = NumberSequence.new(0.3)
     huntBeam.Attachment0 = att0
-    pcall(function() hrp.CFrame = CFrame.new(oldCFrame.Position + Vector3.new(0, 500, 0)) end)
-    task.wait(0.05)
 
+    -- ── Loop principal — persecución en suelo, sin saltar al cielo ────────
     connections.hunt = RunService.Heartbeat:Connect(function(dt)
         if not hunting then return end
+
         if not huntTarget or not huntTarget.Parent then
             stopHunt()
-            pcall(function() hrp.CFrame = oldCFrame end)
             return
         end
+
         pcall(function()
             local tChar = huntTarget.Character
-            local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
-            local tHum = tChar and tChar:FindFirstChild("Humanoid")
+            local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
+            local tHum  = tChar and tChar:FindFirstChild("Humanoid")
+
             if tHrp and tHum and tHum.Health > 0 then
+
+                -- ESP highlight
                 if not tChar:FindFirstChild("HUNT_ESP") then
                     huntHighlight = Instance.new("Highlight", tChar)
-                    huntHighlight.Name = "HUNT_ESP"
-                    huntHighlight.FillColor = Color3.fromRGB(255, 0, 0)
+                    huntHighlight.Name             = "HUNT_ESP"
+                    huntHighlight.FillColor        = Color3.fromRGB(255, 0, 0)
                     huntHighlight.FillTransparency = 0.5
-                    huntHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    huntHighlight.OutlineColor     = Color3.fromRGB(255, 255, 255)
                 end
                 if not att1 or att1.Parent ~= tHrp then
                     if att1 then att1:Destroy() end
                     att1 = Instance.new("Attachment", tHrp)
                     huntBeam.Attachment1 = att1
                 end
-                -- ★ FIX BUG-E: bav.AngularVelocity ya se estableció al crear bav (arriba).
-                -- Reasignarlo cada Heartbeat fuerza al solver a recalcular constraints cada frame → lag.
-                -- Solo se toca si se desconectó o reinició; aquí no hace falta.
 
-                -- ★ FIX BUG-F: hrp.CFrame = tHrp.CFrame cada frame "teletransporta" el HRP
-                -- sin pasar por el integrador de físicas → el engine detecta un salto de posición
-                -- enorme, intenta resolver penetraciones, y expulsa partes a través del suelo.
-                -- Usar BodyVelocity para perseguir al target suavemente.
-                local delta = tHrp.Position - hrp.Position
-                local dist  = delta.Magnitude
-                if dist > 0.5 then
-                    bv.Velocity = delta.Unit * math.min(dist * 20, 500)
+                -- ── Velocidad: siempre 4 más rápido que la víctima ─────────────
+                local tVel       = tHrp.AssemblyLinearVelocity.Magnitude
+                local chaseSpeed = math.max(MIN_SPEED, tVel + BASE_EXTRA)
+
+                -- ── Dirección: solo X y Z (suelo), misma Y que la víctima ───────
+                -- Así no sube al cielo ni se hunde — sigue al nivel del suelo
+                local myPos  = hrp.Position
+                local tPos   = tHrp.Position
+                local flatDX = tPos.X - myPos.X
+                local flatDZ = tPos.Z - myPos.Z
+                local flatDist = math.sqrt(flatDX*flatDX + flatDZ*flatDZ)
+
+                -- Diferencia de altura: igualamos la Y de la víctima suavemente
+                local dyRaw  = tPos.Y - myPos.Y
+                local dyClamp = math.clamp(dyRaw, -chaseSpeed, chaseSpeed)
+
+                if flatDist > SNAP_DIST then
+                    local nx = flatDX / flatDist
+                    local nz = flatDZ / flatDist
+                    bv.Velocity = Vector3.new(nx * chaseSpeed, dyClamp, nz * chaseSpeed)
+                elseif flatDist > 0.1 then
+                    local nx = flatDX / flatDist
+                    local nz = flatDZ / flatDist
+                    bv.Velocity = Vector3.new(nx * chaseSpeed * 0.4, dyClamp * 0.4, nz * chaseSpeed * 0.4)
                 else
-                    bv.Velocity = Vector3.zero
+                    bv.Velocity = Vector3.new(0, dyClamp, 0)
                 end
 
-                -- ★ FIX BUG-H: AssemblyAngularVelocity de 999M rad/s en hrp Y en tHrp
-                -- causa NaN en el integrador y hace que ambos personajes "exploten" en física.
-                -- El giro efectivo para el efecto visual es suficiente con 60 rad/s en Y.
-                hrp.AssemblyAngularVelocity = Vector3.new(0, 60, 0)
-                hrp.AssemblyLinearVelocity = Vector3.zero
+                -- ── Giro fling en cada frame ───────────────────────────────────
+                hrp.AssemblyAngularVelocity = Vector3.new(0, FLING_SPIN, 0)
+
             else
                 stopHunt()
                 pcall(function()
-                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyLinearVelocity  = Vector3.zero
                     hrp.AssemblyAngularVelocity = Vector3.zero
-                    hrp.CFrame = oldCFrame
                 end)
                 pcall(function()
-                    StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Victima Eliminada. 💀", Duration=3})
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "TOXIC HUNTER",
+                        Text  = "Víctima eliminada. 💀",
+                        Duration = 3
+                    })
                 end)
             end
         end)
@@ -1595,16 +1786,8 @@ local function buildCatalogEntries(scrollFrame, items, statusLabel)
         thumb.Image = ""
         Instance.new("UICorner", thumb).CornerRadius = UDim.new(0, 6)
 
-        -- Cargar thumbnail async
-        task.spawn(function()
-            local imgOk, imgUrl = pcall(function()
-                return "https://www.roblox.com/asset-thumbnail/image?assetId=" .. tostring(item.id) .. "&width=110&height=110&format=Png"
-            end)
-            if imgOk then
-                -- En exploits se puede usar el URL directo en Image
-                pcall(function() thumb.Image = imgUrl end)
-            end
-        end)
+        -- FIX: rbxthumb:// funciona en Roblox sin bloqueo HTTP externo
+        thumb.Image = "rbxthumb://type=Asset&id=" .. tostring(item.id) .. "&w=110&h=110"
 
         -- Nombre del emote
         local nameLbl = Instance.new("TextLabel", row)
@@ -1810,10 +1993,13 @@ local function buildAndOrchestrate()
         menuOpen = not menuOpen
         if isMobile then
             if menuOpen then menuBase.Visible = true end
-            local tInfo = TweenInfo.new(0.20, Enum.EasingStyle.Quint, menuOpen and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+            local tInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quint, menuOpen and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+            -- FIX: cancelar tween activo antes de crear uno nuevo (evita flicker)
+            if menuBase:FindFirstChildOfClass("Tween") then pcall(function() menuBase:FindFirstChildOfClass("Tween"):Cancel() end) end
             local tween = TweenService:Create(menuBase, tInfo, {BackgroundTransparency = menuOpen and 0.15 or 1})
             tween:Play()
-            tween.Completed:Connect(function()
+            tween.Completed:Connect(function(state)
+                if state ~= Enum.PlaybackState.Completed then return end
                 if not menuOpen then menuBase.Visible = false end
                 bgBlur.Size = menuOpen and 15 or 0
             end)
@@ -2373,14 +2559,18 @@ local function buildAndOrchestrate()
         end)
     end
 
-    -- Paginación siguiente
+    -- Paginación siguiente — FIX: avanzar con el cursor correcto
     nextBtn.MouseButton1Click:Connect(function()
         if catalogNextCursor == "" then return end
-        table.insert(catalogPrevCursors, catalogNextCursor)  -- guardar para retroceder
+        -- Guardar cursor de la página ACTUAL (para poder retroceder)
+        local cursorActual = catalogPrevCursors[#catalogPrevCursors] or ""
+        if cursorActual ~= catalogNextCursor then
+            -- Solo insertar si todavía no está registrado
+        end
+        local cursorToLoad = catalogNextCursor
+        table.insert(catalogPrevCursors, catalogNextCursor)
         catalogCurrentPage = catalogCurrentPage + 1
-        -- El cursor anterior es el que usamos ahora
-        local prevCur = catalogPrevCursors[#catalogPrevCursors - 1] or ""
-        loadCatalogPage(prevCur, false)
+        loadCatalogPage(cursorToLoad, false)
     end)
 
     -- Paginación anterior
@@ -2633,7 +2823,7 @@ local function buildAndOrchestrate()
             end
         end)
         label.FocusLost:Connect(function()
-            local matchNum = label.Text:match("%d+")
+            local matchNum = label.Text:match("%-?%d+%.?%d*")  -- FIX: acepta decimales y negativos
             local num = tonumber(matchNum)
             if num then
                 local finalVal = math.floor(math.clamp(num, min, max))
@@ -7553,7 +7743,8 @@ task.spawn(function()
         end
     end)
     UIS2.InputChanged:Connect(function(i)
-        if dragActive and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        if not dragActive then return end  -- FIX: guard temprana evita cálculos innecesarios
+        if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
             local d = i.Position - dragStart
             cmdFrame.Position = UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset + d.X, dragOrigin.Y.Scale, dragOrigin.Y.Offset + d.Y)
         end
@@ -8039,6 +8230,9 @@ task.spawn(function()
         "│ /fonts                               │",
         "│   Lista fuentes en carpeta fonts/    │",
         "│   Click en nombre para aplicarla     │",
+        "├─────────────────────────────────────┤",
+        "│ /device                              │",
+        "│   OS, CPU, modelo, res, executor     │",
         "├─────────────────────────────────────┤",
         "│ /help                                │",
         "│   Show this list                     │",
@@ -8730,6 +8924,30 @@ task.spawn(function()
                 _G.PULPI_CUSTOM_FONT_NAME and ("✅ " .. _G.PULPI_CUSTOM_FONT_NAME)
                 or "ninguna (Roblox por defecto)"
             ), "info")
+
+
+        -- /device — información del dispositivo
+        elseif cmd == "/device" then
+            local ok_d, hw = pcall(_DeviceInfo.detect)
+            if ok_d and hw then
+                log("┌──────────── DEVICE INFO ─────────────┐", "sys")
+                log("│ 📱 OS       : " .. hw.os,             "info")
+                log("│ 📟 Modelo   : " .. hw.model,          "info")
+                log("│ 💻 CPU      : " .. hw.cpu,            "info")
+                log("│ 🖥  Res      : " .. hw.res,           "info")
+                log("│ ⚙️  Executor : " .. hw.exec,           "info")
+                log("└──────────────────────────────────────┘", "sys")
+                -- Ejemplos: Galaxy S22 Ultra · Snapdragon 8 Gen 1
+                --           iPhone 12 mini  · A14 Bionic
+            else
+                -- Fallback sin DeviceInfo
+                local _vp2 = game:GetService("Workspace").CurrentCamera.ViewportSize
+                local _uis2 = game:GetService("UserInputService")
+                log("┌──────────── DEVICE INFO ─────────────┐", "sys")
+                log("│ 📱 OS       : " .. (_uis2.TouchEnabled and not _uis2.KeyboardEnabled and "Mobile" or "PC"), "info")
+                log("│ 🖥  Res      : " .. math.floor(_vp2.X) .. "x" .. math.floor(_vp2.Y), "info")
+                log("└──────────────────────────────────────┘", "sys")
+            end
 
         else
             log("Unknown command: " .. cmd .. "  (try /help)", "err")
@@ -9631,4 +9849,38 @@ task.spawn(function()
 end)
 -- ============================================================
 -- FIN ADDON GAMEPAD v2.0
--- ============================================================
+-- ============================================================,local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local lp = Players.LocalPlayer
+
+local function nofalldamage(char)
+    local root = char:WaitForChild("HumanoidRootPart", 5)
+    if not root then return end
+
+    local connection
+    connection = RunService.Heartbeat:Connect(function()
+        -- Si el personaje muere o el root desaparece, desconectamos el loop
+        if not root or not root.Parent then
+            if connection then connection:Disconnect() end
+            return
+        end
+
+        -- Lógica original para evitar el daño por caída
+        local oldVel = root.AssemblyLinearVelocity
+        root.AssemblyLinearVelocity = Vector3.zero
+        RunService.RenderStepped:Wait()
+        root.AssemblyLinearVelocity = oldVel
+    end)
+end
+
+-- 1. Se lo aplicamos al personaje si ya está vivo en el mapa
+if lp.Character then
+    task.spawn(nofalldamage, lp.Character)
+end
+
+-- 2. Nos aseguramos de que se vuelva a aplicar si el jugador muere y reaparece
+lp.CharacterAdded:Connect(function(char)
+    nofalldamage(char)
+end)
+
+print("No Fall Damage activado y funcionando en segundo plano.")
