@@ -2185,9 +2185,11 @@ local function buildAndOrchestrate()
     contentArea.BorderSizePixel = 0
     contentArea.ClipsDescendants = true
 
-    -- ── Test Mode toggle (esquina bottom-left del sidebar) ────────
+    -- ── Test Mode toggle ──────────────────────────────────────────
+    -- Posicionado absolutamente en el sidebar (no en el layout)
     local tmF = Instance.new("Frame", sidebar)
-    tmF.Size = UDim2.new(1, 0, 0, isMobile and 36 or 28)
+    tmF.Size = UDim2.new(1, -(isMobile and 12 or 10), 0, isMobile and 32 or 26)
+    tmF.Position = UDim2.new(0, isMobile and 6 or 5, 1, -(isMobile and 100 or 82))
     tmF.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     tmF.BackgroundTransparency = 0.7
     tmF.BorderSizePixel = 0
@@ -2576,9 +2578,24 @@ local function buildAndOrchestrate()
             end
 
             if isMobile then
-                -- En móvil conectar al track directamente para no ser bloqueado por el scroll
-                _mc = track.InputChanged:Connect(onMove)
-                _ec = track.InputEnded:Connect(onEnd)
+                -- En móvil UIS.InputChanged captura la posición real del dedo
+                -- track.InputChanged es bloqueado por ScrollingFrame padre
+                _mc = UIS.InputChanged:Connect(function(i2)
+                    if not dragging then return end
+                    if i2.UserInputType == Enum.UserInputType.Touch then
+                        processInput(i2)
+                    end
+                end)
+                _ec = UIS.InputEnded:Connect(function(i2)
+                    if i2.UserInputType == Enum.UserInputType.Touch then
+                        dragging = false
+                        TweenService:Create(knob, TweenInfo.new(0.1), {
+                            Size = UDim2.fromOffset(knobR * 2, knobR * 2)
+                        }):Play()
+                        if _mc then _mc:Disconnect(); _mc = nil end
+                        if _ec then _ec:Disconnect(); _ec = nil end
+                    end
+                end)
             else
                 _mc = UIS.InputChanged:Connect(onMove)
                 _ec = UIS.InputEnded:Connect(onEnd)
@@ -2827,14 +2844,15 @@ local function buildAndOrchestrate()
     local r6Active = false
     local r6RespawnConn = nil
 
-    -- ── Foto de perfil + username al final del sidebar ────────────────
-    -- Spacer flexible para empujar la foto al fondo
-    local sideSpacerFlex = Instance.new("Frame", sidebar)
-    sideSpacerFlex.Size = UDim2.new(1, 0, 0, 4)
-    sideSpacerFlex.BackgroundTransparency = 1
+    -- ── Foto de perfil — posición ABSOLUTA al fondo del sidebar ──────────
+    -- Sacado del UIListLayout para que siempre aparezca sin importar cuántos tabs haya
+    local PB_H = isMobile and 58 or 48
+    -- Ajustar padding inferior del sidebar para dejar espacio a profileBtn y tmF
+    sidePad.PaddingBottom = UDim.new(0, PB_H + (isMobile and 44 or 36) + (isMobile and 12 or 10))
 
     local profileBtn = Instance.new("TextButton", sidebar)
-    profileBtn.Size = UDim2.new(1, 0, 0, isMobile and 64 or 54)
+    profileBtn.Size = UDim2.new(1, -(isMobile and 12 or 10), 0, PB_H)
+    profileBtn.Position = UDim2.new(0, isMobile and 6 or 5, 1, -(PB_H + (isMobile and 8 or 6)))
     profileBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     profileBtn.BackgroundTransparency = 0.65
     profileBtn.Text = ""
