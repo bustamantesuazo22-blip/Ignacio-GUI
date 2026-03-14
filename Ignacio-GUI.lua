@@ -1087,7 +1087,7 @@ local function openPartsTool(logFn)
         if logFn then logFn("Parts: agarrado → " .. part.Name, "ok") end
     end
 
-    -- Conexión de input
+    -- Conexión de input — PC: mouse clicks
     local inputConn = UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1100,6 +1100,88 @@ local function openPartsTool(logFn)
             end
         end
     end)
+
+    -- Botones táctiles para MÓVIL (grandes, siempre visibles)
+    if isMobile then
+        local mobileBar = Instance.new("Frame", partsGui)
+        mobileBar.Size = UDim2.new(0, isMobile and 180 or 140, 0, isMobile and 56 or 44)
+        mobileBar.Position = UDim2.new(0.5, -(isMobile and 90 or 70), 1, -(isMobile and 80 or 64))
+        mobileBar.BackgroundTransparency = 1
+        mobileBar.BorderSizePixel = 0
+
+        local mbLayout = Instance.new("UIListLayout", mobileBar)
+        mbLayout.FillDirection = Enum.FillDirection.Horizontal
+        mbLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        mbLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+        mbLayout.Padding = UDim.new(0, 10)
+
+        -- Botón AGARRAR (verde)
+        local grabBtn = Instance.new("TextButton", mobileBar)
+        grabBtn.Size = UDim2.fromOffset(isMobile and 80 or 62, isMobile and 48 or 38)
+        grabBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        grabBtn.BackgroundTransparency = 0.1
+        grabBtn.Text = "⬤ Grab"
+        grabBtn.TextColor3 = Color3.new(1, 1, 1)
+        grabBtn.Font = Enum.Font.GothamBold
+        grabBtn.TextSize = isMobile and 14 or 12
+        Instance.new("UICorner", grabBtn).CornerRadius = UDim.new(0, 12)
+        local gbStr = Instance.new("UIStroke", grabBtn)
+        gbStr.Color = Color3.fromRGB(80, 255, 120)
+        gbStr.Transparency = 0.4
+        gbStr.Thickness = 1.5
+
+        -- Botón SOLTAR (rojo)
+        local dropBtn = Instance.new("TextButton", mobileBar)
+        dropBtn.Size = UDim2.fromOffset(isMobile and 80 or 62, isMobile and 48 or 38)
+        dropBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+        dropBtn.BackgroundTransparency = 0.1
+        dropBtn.Text = "⬤ Drop"
+        dropBtn.TextColor3 = Color3.new(1, 1, 1)
+        dropBtn.Font = Enum.Font.GothamBold
+        dropBtn.TextSize = isMobile and 14 or 12
+        Instance.new("UICorner", dropBtn).CornerRadius = UDim.new(0, 12)
+        local dbStr = Instance.new("UIStroke", dropBtn)
+        dbStr.Color = Color3.fromRGB(255, 80, 80)
+        dbStr.Transparency = 0.4
+        dbStr.Thickness = 1.5
+
+        grabBtn.MouseButton1Click:Connect(function()
+            grabPart()
+            -- Feedback visual
+            TweenService:Create(grabBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(80, 220, 120)}):Play()
+            task.delay(0.15, function()
+                TweenService:Create(grabBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(40, 180, 80)}):Play()
+            end)
+        end)
+
+        dropBtn.MouseButton1Click:Connect(function()
+            if grabbedPart then
+                local nm = grabbedPart.Name
+                releasePart()
+                if logFn then logFn("Parts: soltado → " .. nm, "muted") end
+                TweenService:Create(dropBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(240, 80, 80)}):Play()
+                task.delay(0.15, function()
+                    TweenService:Create(dropBtn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(200, 40, 40)}):Play()
+                end)
+            end
+        end)
+
+        -- El crosshair en móvil es más grande para ser visible
+        crossParts.Size = UDim2.fromOffset(18, 18)
+        -- Líneas de crosshair adicionales para móvil
+        local ch1 = Instance.new("Frame", partsGui)
+        ch1.Size = UDim2.fromOffset(22, 2)
+        ch1.Position = UDim2.fromScale(0.5, 0.5)
+        ch1.AnchorPoint = Vector2.new(0.5, 0.5)
+        ch1.BackgroundColor3 = Color3.fromRGB(150, 80, 255)
+        ch1.BorderSizePixel = 0
+        local ch2 = Instance.new("Frame", partsGui)
+        ch2.Size = UDim2.fromOffset(2, 22)
+        ch2.Position = UDim2.fromScale(0.5, 0.5)
+        ch2.AnchorPoint = Vector2.new(0.5, 0.5)
+        ch2.BackgroundColor3 = Color3.fromRGB(150, 80, 255)
+        ch2.BorderSizePixel = 0
+    end
 
     local function closeParts()
         releasePart()
@@ -2617,6 +2699,7 @@ local function buildAndOrchestrate()
         page.ScrollingDirection = Enum.ScrollingDirection.Y
         page.AutomaticCanvasSize = Enum.AutomaticSize.Y
         page.Visible = false
+        page.ZIndex = 2
         local layout = Instance.new("UIListLayout", page)
         layout.Padding = UDim.new(0, isMobile and 8 or 6)
         layout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -2738,7 +2821,9 @@ local function buildAndOrchestrate()
     end
 
     -- ── Página R6 Force (tab 6, creada aquí pero el botón es la foto) ─
+    -- ── Página R6 Force — ZIndex alto para que nunca quede debajo en móvil
     local pgR6 = makePage()
+    pgR6.ZIndex = 5
     local r6Active = false
     local r6RespawnConn = nil
 
@@ -2815,7 +2900,10 @@ local function buildAndOrchestrate()
                 btn:FindFirstChild("SelBar").Visible = false
             end
             for _, pg in ipairs(pages) do pg.Visible = false end
+            -- Reset scroll y forzar visible encima de todo
+            pgR6.CanvasPosition = Vector2.zero
             pgR6.Visible = true
+            pgR6.ZIndex = 5
             currentTab = 0
         end
     end)
@@ -3560,6 +3648,86 @@ local function buildAndOrchestrate()
         makeSectionHeader(pg1, "Physics")
         makeToggleRow(pg1, "Noclip", "Atraviesa paredes y objetos", SavedConfig.NoclipActive, function(state)
             manageNoclip(state)
+        end)
+
+        -- ── Anti-Fling ────────────────────────────────────────────
+        -- Hace que tu personaje traspase SOLO a otros jugadores.
+        -- Tus partes pasan a través de sus hitboxes → imposible que te flingueen.
+        -- Las partes del mapa siguen siendo sólidas (CanCollide normal).
+        local antiFlingActive  = false
+        local antiFlingConn    = nil
+        local antiFlingRefresh = 200
+
+        -- Slider con su propio configKey — no reutiliza WalkSpeed
+        SavedConfig.AntiFlingRefresh = SavedConfig.AntiFlingRefresh or 200
+        makeSliderRow(pg1, "AntiFlingRefresh", "Anti-Fling refresh (ms)", 50, 500, function(v)
+            antiFlingRefresh = v
+        end)
+
+        makeToggleRow(pg1, "Anti-Fling", "Los players no pueden tocar tu personaje", false, function(state)
+            antiFlingActive = state
+            if state then
+                -- Activar: en Heartbeat throttleado poner CanCollide=false entre tu char y otros players
+                if antiFlingConn then antiFlingConn:Disconnect() end
+                local _timer = 0
+                antiFlingConn = RunService.Heartbeat:Connect(function(dt)
+                    _timer = _timer + dt * 1000
+                    if _timer < antiFlingRefresh then return end
+                    _timer = 0
+                    pcall(function()
+                        local myChar = player.Character
+                        if not myChar then return end
+                        -- Iterar partes de OTROS jugadores y hacer que no colisionen con las nuestras
+                        -- usando CollisionGroup si está disponible, o simplemente CanCollide=false
+                        -- en sus partes mientras mi CanCollide sigue true para el mapa.
+                        for _, p2 in pairs(Players:GetPlayers()) do
+                            if p2 ~= player and p2.Character then
+                                for _, v2 in pairs(p2.Character:GetDescendants()) do
+                                    if v2:IsA("BasePart") then
+                                        -- CanCollide false en las partes del rival
+                                        -- Esto hace que no puedan empujarte físicamente
+                                        pcall(function() v2.CanCollide = false end)
+                                    end
+                                end
+                            end
+                        end
+                        -- Asegurar que nuestras propias partes sigan colisionando con el mapa
+                        for _, myPart in pairs(myChar:GetDescendants()) do
+                            if myPart:IsA("BasePart") then
+                                pcall(function() myPart.CanCollide = true end)
+                            end
+                        end
+                    end)
+                end)
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "🛡 Anti-Fling",
+                        Text  = "Activado — los players no te pueden tocar.",
+                        Duration = 3
+                    })
+                end)
+            else
+                -- Desactivar: restaurar CanCollide normal en otros jugadores
+                if antiFlingConn then antiFlingConn:Disconnect(); antiFlingConn = nil end
+                pcall(function()
+                    for _, p2 in pairs(Players:GetPlayers()) do
+                        if p2 ~= player and p2.Character then
+                            for _, v2 in pairs(p2.Character:GetDescendants()) do
+                                if v2:IsA("BasePart") then
+                                    pcall(function() v2.CanCollide = true end)
+                                end
+                            end
+                        end
+                    end
+                end)
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "🛡 Anti-Fling",
+                        Text  = "Desactivado.",
+                        Duration = 2
+                    })
+                end)
+            end
         end)
 
         -- ══ PAGE 2: TROLL ════════════════════════════════════════
