@@ -1508,7 +1508,7 @@ local function startHunt(targetPlayer)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "TOXIC HUNTER 🪐",
-            Text  = "Sky Launch → " .. huntTarget.Name,
+            Text  = "Anclando a: " .. huntTarget.Name,
             Duration = 3
         })
     end)
@@ -1517,12 +1517,17 @@ local function startHunt(targetPlayer)
     local hrp  = char:WaitForChild("HumanoidRootPart", 5)
     if not hrp then stopHunt() return end
 
-    -- PlatformStand = true → el Humanoid deja de controlar el CFrame.
-    -- Sin esto, el engine de animación sobreescribe nuestra posición.
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then hum.PlatformStand = true end
 
-    -- ── Noclip — cache de partes propias ──────────────────────────────
+    -- ── Reclamar autoría de física ────────────────────────────────────
+    -- Con SimulationRadius = math.huge el CLIENTE simula su propia física
+    -- y el servidor acepta esas actualizaciones como autoritativas.
+    -- Sin esto, el servidor corre su propia física y overridea el CFrame
+    -- → eso es lo que hacía que desde otra cuenta te vieras 2m atrás.
+    pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+
+    -- ── Noclip ────────────────────────────────────────────────────────
     local _noclipParts = {}
     for _, v in pairs(char:GetDescendants()) do
         if v:IsA("BasePart") then table.insert(_noclipParts, v) end
@@ -1551,37 +1556,38 @@ local function startHunt(targetPlayer)
     huntBeam.Attachment0  = att0
 
     -- ── Parámetros ────────────────────────────────────────────────────
-    local OFFSET_LOW     = -3      -- studs debajo del HRP rival (empuje ascendente)
-    local OFFSET_HIGH    = 10      -- studs arriba (colisión crítica hacia el cielo)
-    local PHASE_INTERVAL = 0.032   -- segundos por fase (~2 frames a 60fps)
-    local PREDICT_FACTOR = 0.12    -- compensación de latencia de red
-    local TORQUE_Y       = 999999  -- AssemblyAngularVelocity eje Y (fling por contacto)
+    local OFFSET_LOW     = -3
+    local OFFSET_HIGH    = 10
+    local PHASE_INTERVAL = 0.032
+    local TORQUE_Y       = 999999
+    local SNAP_VEL       = 9999   -- studs/s — velocidad de anclaje al target
 
     local phase      = false
     local phaseTimer = 0
 
-    -- ── [FIX RESPAWN] Escuchar CharacterAdded del OBJETIVO ────────────
-    -- Bug anterior: cuando la víctima moría, Health=0 → llamaba stopHunt().
-    -- Ahora: muerte detectada → esperamos su nuevo personaje y seguimos cazando.
-    -- stopHunt() solo ocurre cuando el JUGADOR presiona "Detener".
+    -- ── Respawn listener ──────────────────────────────────────────────
     _huntRespawnConn = huntTarget.CharacterAdded:Connect(function()
-        -- El objetivo respawneó. Limpiar highlight/beam del char viejo.
         if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
         if att1 then att1:Destroy(); att1 = nil end
         pcall(function()
             StarterGui:SetCore("SendNotification", {
                 Title = "TOXIC HUNTER 🪐",
-                Text  = huntTarget.Name .. " respawneó — continuando caza 🗡",
+                Text  = huntTarget.Name .. " respawneó — continuando 🗡",
                 Duration = 2
             })
         end)
-        -- El loop principal detectará el nuevo tHrp en el siguiente frame.
     end)
 
-    -- ── Loop principal — RenderStepped (frame-perfect, cliente) ───────
-    connections.hunt = RunService.RenderStepped:Connect(function(dt)
+    -- ── Loop principal — Heartbeat (post-física) ──────────────────────
+    -- POR QUÉ Heartbeat y no RenderStepped:
+    --   RenderStepped corre ANTES de que la física procese el frame.
+    --   Heartbeat corre DESPUÉS. Eso significa que cuando asignamos
+    --   AssemblyLinearVelocity aquí, es lo ÚLTIMO que pasa en ese frame
+    --   antes de que el motor envíe la replicación al servidor.
+    --   Resultado: el servidor recibe exactamente lo que queremos, sin que
+    --   su física lo sobreescriba en el mismo frame.
+    connections.hunt = RunService.Heartbeat:Connect(function(dt)
         if not hunting then return end
-        -- Si el jugador objetivo salió del servidor → sí parar
         if not huntTarget or not huntTarget.Parent then
             stopHunt(); return
         end
@@ -1590,14 +1596,19 @@ local function startHunt(targetPlayer)
             local tChar = huntTarget.Character
             local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
             local tHum  = tChar and tChar:FindFirstChild("Humanoid")
-
-            -- ── Víctima muerta o recién respawneando ───────────────────
-            -- NO llamamos stopHunt(). Solo esperamos al nuevo personaje.
             if not (tHrp and tHum) then return end
-            -- Muerto pero aún con personaje (ej. ragdoll): también esperar.
             if tHum.Health <= 0 then return end
 
-            -- ── ESP Highlight ──────────────────────────────────────────
+            -- ReplicationFocus al target cada frame:
+            -- Roblox prioriza enviar actualizaciones precisas del área cercana al target.
+            -- Sin esto, si el target se mueve lejos, nuestro cliente recibe sus datos
+            -- con menos frecuencia y nos "quedamos atrás" antes de que podamos reaccionar.
+            player.ReplicationFocus = tHrp
+
+            -- Re-reclamar SimulationRadius (algunos juegos lo resetean)
+            pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+
+            -- ── ESP ────────────────────────────────────────────────────
             if not tChar:FindFirstChild("HUNT_ESP") then
                 huntHighlight = Instance.new("Highlight", tChar)
                 huntHighlight.Name             = "HUNT_ESP"
@@ -1611,21 +1622,13 @@ local function startHunt(targetPlayer)
                 huntBeam.Attachment1 = att1
             end
 
-            -- ── Predicción de posición (compensación de red) ───────────
-            local tVel         = tHrp.AssemblyLinearVelocity
-            local predictedPos = tHrp.Position + tVel * PREDICT_FACTOR
-
-            -- ── Predicción de salto ────────────────────────────────────
-            -- Si la víctima tiene velocidad Y positiva (está saltando/subiendo),
-            -- forzamos fase LOW para mantenernos debajo constantemente.
-            -- El empuje ascendente es más efectivo cuando viene desde abajo.
+            -- ── Fase oscilación vertical ───────────────────────────────
+            local tVel     = tHrp.AssemblyLinearVelocity
             local isJumping = tVel.Y > 5
             local yOffset
             if isJumping then
-                -- Víctima saltando: pegarse siempre debajo para empujar
                 yOffset = OFFSET_LOW
             else
-                -- Normal: alternar entre abajo y arriba (Sky Launch)
                 phaseTimer = phaseTimer + dt
                 if phaseTimer >= PHASE_INTERVAL then
                     phase      = not phase
@@ -1634,29 +1637,36 @@ local function startHunt(targetPlayer)
                 yOffset = phase and OFFSET_HIGH or OFFSET_LOW
             end
 
-            local targetPos = Vector3.new(predictedPos.X, predictedPos.Y + yOffset, predictedPos.Z)
+            local targetPos = tHrp.Position + Vector3.new(0, yOffset, 0)
+            local delta     = targetPos - hrp.Position
+            local dist      = delta.Magnitude
 
-            -- ── Anclaje de rotación: miramos al centro de masa del rival ─
-            local lookAt = tHrp.Position + Vector3.new(0, 1, 0)
-            -- Evitar NaN si estamos exactamente en la misma posición
-            local lookDist = (targetPos - lookAt).Magnitude
-            local newCF
-            if lookDist > 0.01 then
-                newCF = CFrame.lookAt(targetPos, lookAt)
+            -- ── Anclaje real — dos capas simultáneas ───────────────────
+            -- CAPA 1: CFrame directo (lo que VES en tu cliente)
+            -- CAPA 2: AssemblyLinearVelocity masiva en dirección del target
+            --
+            -- Con SimulationRadius = math.huge TU eres el simulador.
+            -- La velocidad que pongas aquí ES la velocidad que el servidor
+            -- broadcast a otros jugadores. Si el target se mueve 0.1 studs
+            -- en el siguiente frame, la velocidad masiva ya te habrá llevado
+            -- encima de él antes de que su física termine de procesarse.
+            --
+            -- Esto es diferente a solo poner CFrame:
+            -- CFrame solo = servidor ve teleport, su física puede overridear
+            -- CFrame + Vel masiva = servidor ve que llegaste ahí con física
+            --                       real, acepta la posición y la retransmite.
+            hrp.CFrame = CFrame.new(targetPos) * (hrp.CFrame - hrp.Position)
+
+            if dist > 0.05 then
+                -- Velocidad = distancia * factor grande → siempre llegar en <1 frame
+                hrp.AssemblyLinearVelocity = delta.Unit * math.min(dist * 120, SNAP_VEL)
             else
-                newCF = CFrame.new(targetPos)
+                -- Ya estamos encima: cero para no overshooting
+                hrp.AssemblyLinearVelocity = Vector3.zero
             end
 
-            -- ── Aplicación CFrame + Torque ─────────────────────────────
-            -- CFrame: posicionamiento instantáneo, sin caminata.
-            -- AssemblyAngularVelocity: torque masivo en Y cada frame.
-            --   → Cualquier contacto mínimo con el hitbox rival lo manda volando.
-            -- [BUG ANTERIOR]: se ponía AssemblyLinearVelocity = zero DESPUÉS
-            --   del torque, lo cual cancelaba el AssemblyAngularVelocity también.
-            --   Ahora: ponemos linear = zero ANTES, luego CFrame, luego torque.
-            hrp.AssemblyLinearVelocity  = Vector3.zero        -- 1. limpiar inercia propia
-            hrp.CFrame                  = newCF               -- 2. posición instantánea
-            hrp.AssemblyAngularVelocity = Vector3.new(0, TORQUE_Y, 0) -- 3. torque activo
+            -- Torque para el fling por contacto
+            hrp.AssemblyAngularVelocity = Vector3.new(0, TORQUE_Y, 0)
         end)
     end)
 end
