@@ -1465,7 +1465,8 @@ local huntHighlight = nil
 local huntBeam      = nil
 local att0, att1    = nil, nil
 local hunting       = false
-local _huntRespawnConn = nil  -- escucha CharacterAdded del objetivo
+local _huntRespawnConn     = nil  -- escucha CharacterAdded del objetivo
+local _huntSelfRespawnConn = nil  -- escucha CharacterAdded del jugador local (fix respawn)
 
 -- ==========================================
 -- [ TOXIC HUNTER — SKY LAUNCH ENGINE v3 ]
@@ -1475,9 +1476,10 @@ local _huntRespawnConn = nil  -- escucha CharacterAdded del objetivo
 -- ==========================================
 local function stopHunt()
     hunting = false
-    if connections.hunt       then connections.hunt:Disconnect();       connections.hunt       = nil end
-    if connections.huntNoclip then connections.huntNoclip:Disconnect(); connections.huntNoclip = nil end
-    if _huntRespawnConn       then _huntRespawnConn:Disconnect();       _huntRespawnConn       = nil end
+    if connections.hunt         then connections.hunt:Disconnect();         connections.hunt         = nil end
+    if connections.huntNoclip   then connections.huntNoclip:Disconnect();   connections.huntNoclip   = nil end
+    if _huntRespawnConn         then _huntRespawnConn:Disconnect();         _huntRespawnConn         = nil end
+    if _huntSelfRespawnConn     then _huntSelfRespawnConn:Disconnect();     _huntSelfRespawnConn     = nil end
     if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
     if huntBeam      then huntBeam:Destroy();      huntBeam      = nil end
     if att0 then att0:Destroy(); att0 = nil end
@@ -1486,7 +1488,11 @@ local function stopHunt()
         local char = player.Character
         if not char then return end
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.PlatformStand = false end
+        if hum then
+            hum.PlatformStand = false
+            -- Restaurar WalkSpeed al valor guardado en config
+            hum.WalkSpeed = SavedConfig and SavedConfig.WalkSpeed or 16
+        end
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if hrp then
             hrp.AssemblyLinearVelocity  = Vector3.zero
@@ -1513,59 +1519,150 @@ local function startHunt(targetPlayer)
         })
     end)
 
-    local char = player.Character or player.CharacterAdded:Wait()
-    local hrp  = char:WaitForChild("HumanoidRootPart", 5)
-    if not hrp then stopHunt() return end
+    -- ── Inicializa/reinicializa el loop sobre el personaje del LOCAL player ──
+    -- Se llama tanto al arrancar como tras cada respawn del jugador local.
+    local function _initHuntLoop(char)
+        -- Limpiar conexiones de física anteriores (sin tocar _hunt*RespawnConn)
+        if connections.hunt       then connections.hunt:Disconnect();       connections.hunt       = nil end
+        if connections.huntNoclip then connections.huntNoclip:Disconnect(); connections.huntNoclip = nil end
+        if att0 then att0:Destroy(); att0 = nil end
 
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then hum.PlatformStand = true end
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if not hrp or not hunting then return end
 
-    -- ── Reclamar autoría de física ────────────────────────────────────
-    -- Con SimulationRadius = math.huge el CLIENTE simula su propia física
-    -- y el servidor acepta esas actualizaciones como autoritativas.
-    -- Sin esto, el servidor corre su propia física y overridea el CFrame
-    -- → eso es lo que hacía que desde otra cuenta te vieras 2m atrás.
-    pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
-
-    -- ── Noclip ────────────────────────────────────────────────────────
-    local _noclipParts = {}
-    for _, v in pairs(char:GetDescendants()) do
-        if v:IsA("BasePart") then table.insert(_noclipParts, v) end
-    end
-    local _cacheConn = char.DescendantAdded:Connect(function(v)
-        if v:IsA("BasePart") then table.insert(_noclipParts, v) end
-    end)
-    connections.huntNoclip = RunService.Stepped:Connect(function()
-        if not hunting then _cacheConn:Disconnect() return end
-        for _, v in ipairs(_noclipParts) do
-            pcall(function() if v and v.Parent then v.CanCollide = false end end)
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.PlatformStand = true
+            hum.WalkSpeed = 300   -- velocidad de caminata máxima para seguir al objetivo
         end
-    end)
 
-    -- ── Beam visual ───────────────────────────────────────────────────
-    att0 = Instance.new("Attachment", hrp)
-    huntBeam = Instance.new("Beam", hrp)
-    huntBeam.Color        = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 60,  0)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 200, 0)),
-    })
-    huntBeam.FaceCamera   = true
-    huntBeam.Width0       = 0.6
-    huntBeam.Width1       = 0.6
-    huntBeam.Transparency = NumberSequence.new(0.25)
-    huntBeam.Attachment0  = att0
+        -- ── Reclamar autoría de física ────────────────────────────────────
+        pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
 
-    -- ── Parámetros ────────────────────────────────────────────────────
-    local OFFSET_LOW     = -3
-    local OFFSET_HIGH    = 10
-    local PHASE_INTERVAL = 0.032
-    local TORQUE_Y       = 999999
-    local SNAP_VEL       = 9999   -- studs/s — velocidad de anclaje al target
+        -- ── Noclip ────────────────────────────────────────────────────────
+        local _noclipParts = {}
+        for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then table.insert(_noclipParts, v) end
+        end
+        local _cacheConn = char.DescendantAdded:Connect(function(v)
+            if v:IsA("BasePart") then table.insert(_noclipParts, v) end
+        end)
+        connections.huntNoclip = RunService.Stepped:Connect(function()
+            if not hunting then _cacheConn:Disconnect() return end
+            for _, v in ipairs(_noclipParts) do
+                pcall(function() if v and v.Parent then v.CanCollide = false end end)
+            end
+        end)
 
-    local phase      = false
-    local phaseTimer = 0
+        -- ── Beam visual ───────────────────────────────────────────────────
+        att0 = Instance.new("Attachment", hrp)
+        if huntBeam then huntBeam:Destroy() end
+        huntBeam = Instance.new("Beam", hrp)
+        huntBeam.Color        = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 60,  0)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 200, 0)),
+        })
+        huntBeam.FaceCamera   = true
+        huntBeam.Width0       = 0.6
+        huntBeam.Width1       = 0.6
+        huntBeam.Transparency = NumberSequence.new(0.25)
+        huntBeam.Attachment0  = att0
 
-    -- ── Respawn listener ──────────────────────────────────────────────
+        -- ── Parámetros ────────────────────────────────────────────────────
+        local OFFSET_LOW     = -3
+        local OFFSET_HIGH    = 10
+        local HORIZ_RADIUS   = 2       -- oscilación horizontal ±2 studs (adelante/atrás)
+        local PHASE_INTERVAL = 0.032
+        local TORQUE_Y       = 999999
+        local SNAP_VEL       = 9999
+
+        local phase      = false
+        local phaseTimer = 0
+
+        -- ── Loop principal — Heartbeat (post-física) ──────────────────────
+        local _huntThrottle = 0
+        local HUNT_INTERVAL = 0.1  -- segundos entre cada teleport (ajusta a tu gusto)
+        connections.hunt = RunService.Heartbeat:Connect(function(dt)
+            if not hunting then return end
+            if not huntTarget or not huntTarget.Parent then
+                stopHunt(); return
+            end
+
+            _huntThrottle = _huntThrottle + dt
+            if _huntThrottle < HUNT_INTERVAL then return end
+            _huntThrottle = 0
+
+            pcall(function()
+                local tChar = huntTarget.Character
+                local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                local tHum  = tChar and tChar:FindFirstChild("Humanoid")
+                if not (tHrp and tHum) then return end
+                if tHum.Health <= 0 then return end
+
+                player.ReplicationFocus = tHrp
+                pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+
+                -- ── ESP ────────────────────────────────────────────────────
+                if not tChar:FindFirstChild("HUNT_ESP") then
+                    huntHighlight = Instance.new("Highlight", tChar)
+                    huntHighlight.Name             = "HUNT_ESP"
+                    huntHighlight.FillColor        = Color3.fromRGB(255, 60, 0)
+                    huntHighlight.FillTransparency = 0.45
+                    huntHighlight.OutlineColor     = Color3.fromRGB(255, 200, 0)
+                end
+                if not att1 or att1.Parent ~= tHrp then
+                    if att1 then att1:Destroy() end
+                    att1 = Instance.new("Attachment", tHrp)
+                    huntBeam.Attachment1 = att1
+                end
+
+                -- ── Fase oscilación ────────────────────────────────────────
+                local tVel      = tHrp.AssemblyLinearVelocity
+                local isJumping = tVel.Y > 5
+                local yOffset
+                if isJumping then
+                    yOffset = OFFSET_LOW
+                else
+                    phaseTimer = phaseTimer + dt
+                    if phaseTimer >= PHASE_INTERVAL then
+                        phase      = not phase
+                        phaseTimer = 0
+                    end
+                    yOffset = phase and OFFSET_HIGH or OFFSET_LOW
+                end
+
+                -- ── Oscilación horizontal ±2 studs (adelante ↔ atrás) ──────
+                -- Calcula el eje horizontal desde el local player hacia el target
+                -- y oscila ±HORIZ_RADIUS studs en ese eje → efecto "bump" para fling
+                local delta2d = Vector3.new(
+                    tHrp.Position.X - hrp.Position.X,
+                    0,
+                    tHrp.Position.Z - hrp.Position.Z
+                )
+                local forward     = delta2d.Magnitude > 0.1 and delta2d.Unit or tHrp.CFrame.LookVector
+                local horizShift  = phase and HORIZ_RADIUS or -HORIZ_RADIUS
+
+                local targetPos = tHrp.Position + Vector3.new(0, yOffset, 0) + forward * horizShift
+                local delta     = targetPos - hrp.Position
+                local dist      = delta.Magnitude
+
+                -- CAPA 1: CFrame directo (lo que VES en tu cliente)
+                hrp.CFrame = CFrame.new(targetPos) * (hrp.CFrame - hrp.Position)
+
+                -- CAPA 2: velocidad masiva — servidor la acepta como física real
+                if dist > 0.05 then
+                    hrp.AssemblyLinearVelocity = delta.Unit * math.min(dist * 120, SNAP_VEL)
+                else
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end
+
+                -- Torque para el fling por contacto
+                hrp.AssemblyAngularVelocity = Vector3.new(0, TORQUE_Y, 0)
+            end)
+        end)
+    end
+
+    -- ── Respawn listener del TARGET ────────────────────────────────────────
     _huntRespawnConn = huntTarget.CharacterAdded:Connect(function()
         if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
         if att1 then att1:Destroy(); att1 = nil end
@@ -1578,97 +1675,24 @@ local function startHunt(targetPlayer)
         end)
     end)
 
-    -- ── Loop principal — Heartbeat (post-física) ──────────────────────
-    -- POR QUÉ Heartbeat y no RenderStepped:
-    --   RenderStepped corre ANTES de que la física procese el frame.
-    --   Heartbeat corre DESPUÉS. Eso significa que cuando asignamos
-    --   AssemblyLinearVelocity aquí, es lo ÚLTIMO que pasa en ese frame
-    --   antes de que el motor envíe la replicación al servidor.
-    --   Resultado: el servidor recibe exactamente lo que queremos, sin que
-    --   su física lo sobreescriba en el mismo frame.
-    connections.hunt = RunService.Heartbeat:Connect(function(dt)
+    -- ── Respawn listener del JUGADOR LOCAL (FIX: caza no se corta al morir) ──
+    _huntSelfRespawnConn = player.CharacterAdded:Connect(function(newChar)
         if not hunting then return end
-        if not huntTarget or not huntTarget.Parent then
-            stopHunt(); return
-        end
-
+        task.wait(0.5)  -- esperar que el personaje cargue completamente
+        if not hunting then return end
         pcall(function()
-            local tChar = huntTarget.Character
-            local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
-            local tHum  = tChar and tChar:FindFirstChild("Humanoid")
-            if not (tHrp and tHum) then return end
-            if tHum.Health <= 0 then return end
-
-            -- ReplicationFocus al target cada frame:
-            -- Roblox prioriza enviar actualizaciones precisas del área cercana al target.
-            -- Sin esto, si el target se mueve lejos, nuestro cliente recibe sus datos
-            -- con menos frecuencia y nos "quedamos atrás" antes de que podamos reaccionar.
-            player.ReplicationFocus = tHrp
-
-            -- Re-reclamar SimulationRadius (algunos juegos lo resetean)
-            pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
-
-            -- ── ESP ────────────────────────────────────────────────────
-            if not tChar:FindFirstChild("HUNT_ESP") then
-                huntHighlight = Instance.new("Highlight", tChar)
-                huntHighlight.Name             = "HUNT_ESP"
-                huntHighlight.FillColor        = Color3.fromRGB(255, 60, 0)
-                huntHighlight.FillTransparency = 0.45
-                huntHighlight.OutlineColor     = Color3.fromRGB(255, 200, 0)
-            end
-            if not att1 or att1.Parent ~= tHrp then
-                if att1 then att1:Destroy() end
-                att1 = Instance.new("Attachment", tHrp)
-                huntBeam.Attachment1 = att1
-            end
-
-            -- ── Fase oscilación vertical ───────────────────────────────
-            local tVel     = tHrp.AssemblyLinearVelocity
-            local isJumping = tVel.Y > 5
-            local yOffset
-            if isJumping then
-                yOffset = OFFSET_LOW
-            else
-                phaseTimer = phaseTimer + dt
-                if phaseTimer >= PHASE_INTERVAL then
-                    phase      = not phase
-                    phaseTimer = 0
-                end
-                yOffset = phase and OFFSET_HIGH or OFFSET_LOW
-            end
-
-            local targetPos = tHrp.Position + Vector3.new(0, yOffset, 0)
-            local delta     = targetPos - hrp.Position
-            local dist      = delta.Magnitude
-
-            -- ── Anclaje real — dos capas simultáneas ───────────────────
-            -- CAPA 1: CFrame directo (lo que VES en tu cliente)
-            -- CAPA 2: AssemblyLinearVelocity masiva en dirección del target
-            --
-            -- Con SimulationRadius = math.huge TU eres el simulador.
-            -- La velocidad que pongas aquí ES la velocidad que el servidor
-            -- broadcast a otros jugadores. Si el target se mueve 0.1 studs
-            -- en el siguiente frame, la velocidad masiva ya te habrá llevado
-            -- encima de él antes de que su física termine de procesarse.
-            --
-            -- Esto es diferente a solo poner CFrame:
-            -- CFrame solo = servidor ve teleport, su física puede overridear
-            -- CFrame + Vel masiva = servidor ve que llegaste ahí con física
-            --                       real, acepta la posición y la retransmite.
-            hrp.CFrame = CFrame.new(targetPos) * (hrp.CFrame - hrp.Position)
-
-            if dist > 0.05 then
-                -- Velocidad = distancia * factor grande → siempre llegar en <1 frame
-                hrp.AssemblyLinearVelocity = delta.Unit * math.min(dist * 120, SNAP_VEL)
-            else
-                -- Ya estamos encima: cero para no overshooting
-                hrp.AssemblyLinearVelocity = Vector3.zero
-            end
-
-            -- Torque para el fling por contacto
-            hrp.AssemblyAngularVelocity = Vector3.new(0, TORQUE_Y, 0)
+            StarterGui:SetCore("SendNotification", {
+                Title = "TOXIC HUNTER 🪐",
+                Text  = "Respawneaste — reiniciando caza 🗡",
+                Duration = 2
+            })
         end)
+        _initHuntLoop(newChar)
     end)
+
+    -- Iniciar con el personaje actual
+    local char = player.Character or player.CharacterAdded:Wait()
+    _initHuntLoop(char)
 end
 
 -- ==========================================
@@ -10587,3 +10611,285 @@ lp.CharacterAdded:Connect(function(char)
 end)
 
 print("No Fall Damage activado y funcionando en segundo plano.")
+-- ============================================================
+-- [ F3 ATTRACTOR — RING MATH v1 ]
+-- Mantén F3 pulsado → todas las piezas sueltas del mapa
+-- se atraen a radio 1 alrededor de ti sin colisionar.
+-- Suelta F3 → las piezas se quedan donde están y recuperan
+-- su estado original (CanCollide + propiedades).
+-- Basado en el mismo cos/sin del Super Ring V4.
+-- ============================================================
+do
+    local _UIS       = game:GetService("UserInputService")
+    local _RS        = game:GetService("RunService")
+    local _WS        = game:GetService("Workspace")
+    local _Players   = game:GetService("Players")
+    local _lp        = _Players.LocalPlayer
+
+    -- ── Parámetros ajustables ────────────────────────────────
+    local ORBIT_RADIUS   = 1       -- radio de órbita alrededor del jugador (studs)
+    local PULL_STRENGTH  = 1800    -- fuerza de atracción (mayor = más rápido)
+    local SCAN_RADIUS    = 2000    -- distancia máxima de escaneo de piezas
+    local ROT_SPEED      = 2       -- rotación angular por frame (grados)
+    local MAX_PARTS      = 3000    -- límite de piezas para no explotar el cliente
+    -- ────────────────────────────────────────────────────────
+
+    local f3Active    = false
+    local f3Conn      = nil   -- Heartbeat loop
+    local f3Parts     = {}    -- {part, origCanCollide, origPhysProps}
+    local f3PartsSet  = {}    -- O(1) lookup
+
+    -- ── Construir blacklist de modelos que NO deben atraerse ─
+    local function _buildCharSet()
+        local s = {}
+        for _, p in pairs(_Players:GetPlayers()) do
+            if p.Character then s[p.Character] = true end
+        end
+        return s
+    end
+
+    local function _isLoosePart(part, charSet)
+        if not part:IsA("BasePart")  then return false end
+        if part.Anchored             then return false end
+        -- Descartar partes de personajes
+        local model = part:FindFirstAncestorOfClass("Model")
+        if model and charSet[model]  then return false end
+        -- Descartar partes de personajes via Humanoid
+        if model and model:FindFirstChildOfClass("Humanoid") then return false end
+        return true
+    end
+
+    -- ── Guardar estado original de una pieza ─────────────────
+    local function _snapshot(part)
+        return {
+            part            = part,
+            origCanCollide  = part.CanCollide,
+            origPhysProps   = part.CustomPhysicalProperties,
+        }
+    end
+
+    -- ── Restaurar estado original ─────────────────────────────
+    local function _restore(snap)
+        pcall(function()
+            if snap.part and snap.part.Parent then
+                snap.part.CanCollide = snap.origCanCollide
+                snap.part.CustomPhysicalProperties = snap.origPhysProps
+            end
+        end)
+    end
+
+    -- ── Escanear todas las piezas sueltas del workspace ──────
+    local function _scan()
+        f3Parts    = {}
+        f3PartsSet = {}
+        local charSet = _buildCharSet()
+        local char    = _lp.Character
+        local hrp     = char and char:FindFirstChild("HumanoidRootPart")
+        local center  = hrp and hrp.Position or Vector3.zero
+        local count   = 0
+
+        for _, obj in pairs(_WS:GetDescendants()) do
+            if count >= MAX_PARTS then break end
+            if _isLoosePart(obj, charSet) then
+                -- Filtrar por distancia al jugador
+                if (obj.Position - center).Magnitude <= SCAN_RADIUS then
+                    if not f3PartsSet[obj] then
+                        f3PartsSet[obj] = true
+                        table.insert(f3Parts, _snapshot(obj))
+                        count = count + 1
+                    end
+                end
+            end
+        end
+        return count
+    end
+
+    -- ── Iniciar atracción ─────────────────────────────────────
+    local function startF3()
+        if f3Active then return end
+        f3Active = true
+
+        local n = _scan()
+        print(("[F3 ATTRACTOR] Atrayendo %d piezas | radio=%d"):format(n, ORBIT_RADIUS))
+
+        -- Notificación
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title    = "🧲 F3 ATTRACTOR",
+                Text     = ("Atrayendo %d piezas | Suelta F3 para soltar"):format(n),
+                Duration = 2,
+            })
+        end)
+
+        -- ── Heartbeat loop — misma matemática que Super Ring V4 ──
+        -- Distribuye las N piezas en ángulos equidistantes a ORBIT_RADIUS
+        -- alrededor del HumanoidRootPart del jugador.
+        -- Usa cos/sin igual que el ring original + velocity pull.
+        f3Conn = _RS.Heartbeat:Connect(function()
+            if not f3Active then return end
+
+            local char   = _lp.Character
+            local hrp    = char and char:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+
+            local center = hrp.Position
+            local total  = #f3Parts
+            if total == 0 then return end
+
+            local TWO_PI    = 2 * math.pi
+            local rotOffset = tick() * math.rad(ROT_SPEED * 60)  -- rotación continua en el tiempo
+
+            for i, snap in ipairs(f3Parts) do
+                local part = snap.part
+                if not part or not part.Parent then
+                    -- Pieza destruida/removida — la quitamos de la lista
+                    f3Parts[i] = nil
+                    continue
+                end
+
+                -- ── Ángulo asignado (igual que ring: distribuye equidistante) ──
+                -- angle base = (2π * i) / total   →  igual espaciado
+                -- + rotOffset → rotación orbital continua (mismo efecto que ringRotationSpeed)
+                local ang = (TWO_PI * (i - 1) / total) + rotOffset
+
+                -- ── Posición objetivo: radio ORBIT_RADIUS alrededor del jugador ──
+                -- Mismo cálculo que el ring:
+                --   center.X + cos(ang) * ORBIT_RADIUS
+                --   center.Z + sin(ang) * ORBIT_RADIUS
+                -- Y: al mismo nivel que el HRP (órbita plana, no vortex)
+                local targetPos = Vector3.new(
+                    center.X + math.cos(ang) * ORBIT_RADIUS,
+                    center.Y,                                  -- mismo nivel que el jugador
+                    center.Z + math.sin(ang) * ORBIT_RADIUS
+                )
+
+                -- ── Aplicar sin colisión ───────────────────────────────────────
+                pcall(function()
+                    part.CanCollide = false
+                    -- Propiedades físicas ultra-ligeras para maximizar respuesta
+                    -- igual que el ring original usa (0,0,0,0,0)
+                    part.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+
+                    -- ── Velocidad de atracción — mismo estilo que el ring ────────
+                    -- ring original:  part.Velocity = (targetPos - part.Position).Unit * ringAttrStrength
+                    local delta = targetPos - part.Position
+                    local dist  = delta.Magnitude
+                    if dist > 0.01 then
+                        -- Fuerza proporcional a distancia (efecto resorte suave)
+                        -- más cerca = más lento, más lejos = tira más fuerte
+                        local strength = math.min(dist * PULL_STRENGTH, PULL_STRENGTH)
+                        part.AssemblyLinearVelocity = delta.Unit * strength
+                    else
+                        -- Ya llegó: anclar velocidad a cero para que no salga disparada
+                        part.AssemblyLinearVelocity = Vector3.zero
+                    end
+                end)
+            end
+
+            -- Limpiar nils del array en cada frame (piezas destruidas)
+            local clean = {}
+            for _, snap in ipairs(f3Parts) do
+                if snap then table.insert(clean, snap) end
+            end
+            f3Parts = clean
+        end)
+    end
+
+    -- ── Detener atracción y restaurar todo ───────────────────
+    local function stopF3()
+        if not f3Active then return end
+        f3Active = false
+
+        if f3Conn then
+            f3Conn:Disconnect()
+            f3Conn = nil
+        end
+
+        -- Restaurar CanCollide y propiedades originales de cada pieza
+        local restored = 0
+        for _, snap in ipairs(f3Parts) do
+            if snap then
+                _restore(snap)
+                restored = restored + 1
+            end
+        end
+        f3Parts    = {}
+        f3PartsSet = {}
+
+        print(("[F3 ATTRACTOR] Soltado — %d piezas restauradas"):format(restored))
+
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title    = "🧲 F3 ATTRACTOR",
+                Text     = ("Soltado — %d piezas libres"):format(restored),
+                Duration = 2,
+            })
+        end)
+    end
+
+    -- ── Keybind: F3 pulsado = ON, suelto = OFF ──────────────
+    _UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.F3 then
+            startF3()
+        end
+    end)
+
+    _UIS.InputEnded:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.F3 then
+            stopF3()
+        end
+    end)
+
+    -- ── Re-escanear si el personaje respawnea mientras F3 está pulsado ──
+    _lp.CharacterAdded:Connect(function()
+        if f3Active then
+            task.wait(0.5)
+            if f3Active then
+                local n = _scan()
+                print(("[F3 ATTRACTOR] Re-escaneado tras respawn: %d piezas"):format(n))
+            end
+        end
+    end)
+
+    -- ── GUI indicador (esquina superior izquierda) ────────────
+    task.spawn(function()
+        local gui = Instance.new("ScreenGui")
+        gui.Name           = "F3_ATTRACTOR_GUI"
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder   = 998
+        gui.ResetOnSpawn   = false
+
+        local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+        gui.Parent = (ok and cg) or _lp.PlayerGui
+
+        local badge = Instance.new("TextLabel", gui)
+        badge.Size              = UDim2.fromOffset(210, 28)
+        badge.Position          = UDim2.new(0, 6, 0, 6)
+        badge.BackgroundColor3  = Color3.fromRGB(8, 8, 12)
+        badge.BackgroundTransparency = 0.25
+        badge.TextColor3        = Color3.fromRGB(120, 120, 130)
+        badge.Font              = Enum.Font.Code
+        badge.TextSize          = 13
+        badge.Text              = "🧲 F3 ATTRACTOR  [mantén F3]"
+        badge.TextXAlignment    = Enum.TextXAlignment.Center
+        Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 6)
+
+        _RS.Heartbeat:Connect(function()
+            pcall(function()
+                if f3Active then
+                    badge.TextColor3 = Color3.fromRGB(80, 255, 180)
+                    badge.Text = ("🧲 ATRAYENDO  %d piezas | r=%d"):format(#f3Parts, ORBIT_RADIUS)
+                else
+                    badge.TextColor3 = Color3.fromRGB(120, 120, 130)
+                    badge.Text = "🧲 F3 ATTRACTOR  [mantén F3]"
+                end
+            end)
+        end)
+    end)
+
+    print("[F3 ATTRACTOR] Cargado — mantén F3 para atraer piezas sueltas")
+end
+-- ============================================================
+-- FIN F3 ATTRACTOR
+-- ============================================================
