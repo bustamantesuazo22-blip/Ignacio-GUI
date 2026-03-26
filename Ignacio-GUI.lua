@@ -1087,7 +1087,59 @@ local function openPartsTool(logFn)
         if logFn then logFn("Parts: agarrado → " .. part.Name, "ok") end
     end
 
-    -- Conexión de input
+    -- ── Botones móviles (solo visibles en touch) ─────────────
+    local mobileBar = nil
+    if isMobile then
+        mobileBar = Instance.new("Frame", partsGui)
+        mobileBar.Size = UDim2.fromOffset(220, 52)
+        mobileBar.Position = UDim2.new(0.5, 0, 1, -70)
+        mobileBar.AnchorPoint = Vector2.new(0.5, 1)
+        mobileBar.BackgroundColor3 = Color3.fromRGB(14, 12, 22)
+        mobileBar.BackgroundTransparency = 0.12
+        Instance.new("UICorner", mobileBar).CornerRadius = UDim.new(0, 14)
+        local mbStroke = Instance.new("UIStroke", mobileBar)
+        mbStroke.Color = Color3.fromRGB(130, 80, 255)
+        mbStroke.Thickness = 1.5
+
+        local mbLayout = Instance.new("UIListLayout", mobileBar)
+        mbLayout.FillDirection = Enum.FillDirection.Horizontal
+        mbLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        mbLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+        mbLayout.Padding = UDim.new(0, 10)
+
+        local function makeMobileBtn(txt, bgColor)
+            local btn = Instance.new("TextButton", mobileBar)
+            btn.Size = UDim2.fromOffset(94, 38)
+            btn.BackgroundColor3 = bgColor
+            btn.Text = txt
+            btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.Font = Enum.Font.GothamBold
+            btn.TextSize = 14
+            btn.AutoButtonColor = true
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 9)
+            return btn
+        end
+
+        local grabBtn    = makeMobileBtn("🧲 Agarrar", Color3.fromRGB(80, 40, 160))
+        local releaseBtn = makeMobileBtn("✋ Soltar",   Color3.fromRGB(40, 100, 40))
+
+        -- En móvil el crosshair es el centro de pantalla, grabPart() ya usa eso
+        grabBtn.MouseButton1Click:Connect(function()
+            grabPart()
+        end)
+        releaseBtn.MouseButton1Click:Connect(function()
+            if grabbedPart then
+                local nm = grabbedPart.Name
+                releasePart()
+                if logFn then logFn("Parts: soltado → " .. nm, "muted") end
+            end
+        end)
+
+        -- texto de ayuda en el statusLbl para móvil
+        statusLbl.Text = "Apunta con cámara → Agarrar"
+    end
+
+    -- ── Conexión de input (PC: mouse  |  Móvil: botones arriba) ──
     local inputConn = UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1121,7 +1173,11 @@ local function openPartsTool(logFn)
         end
     end)
 
-    if logFn then logFn("Parts Tool activo.  LClick=agarrar  RClick=soltar", "sys") end
+    if isMobile then
+        if logFn then logFn("Parts Tool activo (móvil). Apunta con cámara + botones.", "sys") end
+    else
+        if logFn then logFn("Parts Tool activo.  LClick=agarrar  RClick=soltar", "sys") end
+    end
 end
 
 -- Exponer para que CMD pueda llamarlo con su función log
@@ -10611,285 +10667,3 @@ lp.CharacterAdded:Connect(function(char)
 end)
 
 print("No Fall Damage activado y funcionando en segundo plano.")
--- ============================================================
--- [ F3 ATTRACTOR — RING MATH v1 ]
--- Mantén F3 pulsado → todas las piezas sueltas del mapa
--- se atraen a radio 1 alrededor de ti sin colisionar.
--- Suelta F3 → las piezas se quedan donde están y recuperan
--- su estado original (CanCollide + propiedades).
--- Basado en el mismo cos/sin del Super Ring V4.
--- ============================================================
-do
-    local _UIS       = game:GetService("UserInputService")
-    local _RS        = game:GetService("RunService")
-    local _WS        = game:GetService("Workspace")
-    local _Players   = game:GetService("Players")
-    local _lp        = _Players.LocalPlayer
-
-    -- ── Parámetros ajustables ────────────────────────────────
-    local ORBIT_RADIUS   = 1       -- radio de órbita alrededor del jugador (studs)
-    local PULL_STRENGTH  = 1800    -- fuerza de atracción (mayor = más rápido)
-    local SCAN_RADIUS    = 2000    -- distancia máxima de escaneo de piezas
-    local ROT_SPEED      = 2       -- rotación angular por frame (grados)
-    local MAX_PARTS      = 3000    -- límite de piezas para no explotar el cliente
-    -- ────────────────────────────────────────────────────────
-
-    local f3Active    = false
-    local f3Conn      = nil   -- Heartbeat loop
-    local f3Parts     = {}    -- {part, origCanCollide, origPhysProps}
-    local f3PartsSet  = {}    -- O(1) lookup
-
-    -- ── Construir blacklist de modelos que NO deben atraerse ─
-    local function _buildCharSet()
-        local s = {}
-        for _, p in pairs(_Players:GetPlayers()) do
-            if p.Character then s[p.Character] = true end
-        end
-        return s
-    end
-
-    local function _isLoosePart(part, charSet)
-        if not part:IsA("BasePart")  then return false end
-        if part.Anchored             then return false end
-        -- Descartar partes de personajes
-        local model = part:FindFirstAncestorOfClass("Model")
-        if model and charSet[model]  then return false end
-        -- Descartar partes de personajes via Humanoid
-        if model and model:FindFirstChildOfClass("Humanoid") then return false end
-        return true
-    end
-
-    -- ── Guardar estado original de una pieza ─────────────────
-    local function _snapshot(part)
-        return {
-            part            = part,
-            origCanCollide  = part.CanCollide,
-            origPhysProps   = part.CustomPhysicalProperties,
-        }
-    end
-
-    -- ── Restaurar estado original ─────────────────────────────
-    local function _restore(snap)
-        pcall(function()
-            if snap.part and snap.part.Parent then
-                snap.part.CanCollide = snap.origCanCollide
-                snap.part.CustomPhysicalProperties = snap.origPhysProps
-            end
-        end)
-    end
-
-    -- ── Escanear todas las piezas sueltas del workspace ──────
-    local function _scan()
-        f3Parts    = {}
-        f3PartsSet = {}
-        local charSet = _buildCharSet()
-        local char    = _lp.Character
-        local hrp     = char and char:FindFirstChild("HumanoidRootPart")
-        local center  = hrp and hrp.Position or Vector3.zero
-        local count   = 0
-
-        for _, obj in pairs(_WS:GetDescendants()) do
-            if count >= MAX_PARTS then break end
-            if _isLoosePart(obj, charSet) then
-                -- Filtrar por distancia al jugador
-                if (obj.Position - center).Magnitude <= SCAN_RADIUS then
-                    if not f3PartsSet[obj] then
-                        f3PartsSet[obj] = true
-                        table.insert(f3Parts, _snapshot(obj))
-                        count = count + 1
-                    end
-                end
-            end
-        end
-        return count
-    end
-
-    -- ── Iniciar atracción ─────────────────────────────────────
-    local function startF3()
-        if f3Active then return end
-        f3Active = true
-
-        local n = _scan()
-        print(("[F3 ATTRACTOR] Atrayendo %d piezas | radio=%d"):format(n, ORBIT_RADIUS))
-
-        -- Notificación
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title    = "🧲 F3 ATTRACTOR",
-                Text     = ("Atrayendo %d piezas | Suelta F3 para soltar"):format(n),
-                Duration = 2,
-            })
-        end)
-
-        -- ── Heartbeat loop — misma matemática que Super Ring V4 ──
-        -- Distribuye las N piezas en ángulos equidistantes a ORBIT_RADIUS
-        -- alrededor del HumanoidRootPart del jugador.
-        -- Usa cos/sin igual que el ring original + velocity pull.
-        f3Conn = _RS.Heartbeat:Connect(function()
-            if not f3Active then return end
-
-            local char   = _lp.Character
-            local hrp    = char and char:FindFirstChild("HumanoidRootPart")
-            if not hrp then return end
-
-            local center = hrp.Position
-            local total  = #f3Parts
-            if total == 0 then return end
-
-            local TWO_PI    = 2 * math.pi
-            local rotOffset = tick() * math.rad(ROT_SPEED * 60)  -- rotación continua en el tiempo
-
-            for i, snap in ipairs(f3Parts) do
-                local part = snap.part
-                if not part or not part.Parent then
-                    -- Pieza destruida/removida — la quitamos de la lista
-                    f3Parts[i] = nil
-                    continue
-                end
-
-                -- ── Ángulo asignado (igual que ring: distribuye equidistante) ──
-                -- angle base = (2π * i) / total   →  igual espaciado
-                -- + rotOffset → rotación orbital continua (mismo efecto que ringRotationSpeed)
-                local ang = (TWO_PI * (i - 1) / total) + rotOffset
-
-                -- ── Posición objetivo: radio ORBIT_RADIUS alrededor del jugador ──
-                -- Mismo cálculo que el ring:
-                --   center.X + cos(ang) * ORBIT_RADIUS
-                --   center.Z + sin(ang) * ORBIT_RADIUS
-                -- Y: al mismo nivel que el HRP (órbita plana, no vortex)
-                local targetPos = Vector3.new(
-                    center.X + math.cos(ang) * ORBIT_RADIUS,
-                    center.Y,                                  -- mismo nivel que el jugador
-                    center.Z + math.sin(ang) * ORBIT_RADIUS
-                )
-
-                -- ── Aplicar sin colisión ───────────────────────────────────────
-                pcall(function()
-                    part.CanCollide = false
-                    -- Propiedades físicas ultra-ligeras para maximizar respuesta
-                    -- igual que el ring original usa (0,0,0,0,0)
-                    part.CustomPhysicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
-
-                    -- ── Velocidad de atracción — mismo estilo que el ring ────────
-                    -- ring original:  part.Velocity = (targetPos - part.Position).Unit * ringAttrStrength
-                    local delta = targetPos - part.Position
-                    local dist  = delta.Magnitude
-                    if dist > 0.01 then
-                        -- Fuerza proporcional a distancia (efecto resorte suave)
-                        -- más cerca = más lento, más lejos = tira más fuerte
-                        local strength = math.min(dist * PULL_STRENGTH, PULL_STRENGTH)
-                        part.AssemblyLinearVelocity = delta.Unit * strength
-                    else
-                        -- Ya llegó: anclar velocidad a cero para que no salga disparada
-                        part.AssemblyLinearVelocity = Vector3.zero
-                    end
-                end)
-            end
-
-            -- Limpiar nils del array en cada frame (piezas destruidas)
-            local clean = {}
-            for _, snap in ipairs(f3Parts) do
-                if snap then table.insert(clean, snap) end
-            end
-            f3Parts = clean
-        end)
-    end
-
-    -- ── Detener atracción y restaurar todo ───────────────────
-    local function stopF3()
-        if not f3Active then return end
-        f3Active = false
-
-        if f3Conn then
-            f3Conn:Disconnect()
-            f3Conn = nil
-        end
-
-        -- Restaurar CanCollide y propiedades originales de cada pieza
-        local restored = 0
-        for _, snap in ipairs(f3Parts) do
-            if snap then
-                _restore(snap)
-                restored = restored + 1
-            end
-        end
-        f3Parts    = {}
-        f3PartsSet = {}
-
-        print(("[F3 ATTRACTOR] Soltado — %d piezas restauradas"):format(restored))
-
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title    = "🧲 F3 ATTRACTOR",
-                Text     = ("Soltado — %d piezas libres"):format(restored),
-                Duration = 2,
-            })
-        end)
-    end
-
-    -- ── Keybind: F3 pulsado = ON, suelto = OFF ──────────────
-    _UIS.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
-        if input.KeyCode == Enum.KeyCode.F3 then
-            startF3()
-        end
-    end)
-
-    _UIS.InputEnded:Connect(function(input)
-        if input.KeyCode == Enum.KeyCode.F3 then
-            stopF3()
-        end
-    end)
-
-    -- ── Re-escanear si el personaje respawnea mientras F3 está pulsado ──
-    _lp.CharacterAdded:Connect(function()
-        if f3Active then
-            task.wait(0.5)
-            if f3Active then
-                local n = _scan()
-                print(("[F3 ATTRACTOR] Re-escaneado tras respawn: %d piezas"):format(n))
-            end
-        end
-    end)
-
-    -- ── GUI indicador (esquina superior izquierda) ────────────
-    task.spawn(function()
-        local gui = Instance.new("ScreenGui")
-        gui.Name           = "F3_ATTRACTOR_GUI"
-        gui.IgnoreGuiInset = true
-        gui.DisplayOrder   = 998
-        gui.ResetOnSpawn   = false
-
-        local ok, cg = pcall(function() return game:GetService("CoreGui") end)
-        gui.Parent = (ok and cg) or _lp.PlayerGui
-
-        local badge = Instance.new("TextLabel", gui)
-        badge.Size              = UDim2.fromOffset(210, 28)
-        badge.Position          = UDim2.new(0, 6, 0, 6)
-        badge.BackgroundColor3  = Color3.fromRGB(8, 8, 12)
-        badge.BackgroundTransparency = 0.25
-        badge.TextColor3        = Color3.fromRGB(120, 120, 130)
-        badge.Font              = Enum.Font.Code
-        badge.TextSize          = 13
-        badge.Text              = "🧲 F3 ATTRACTOR  [mantén F3]"
-        badge.TextXAlignment    = Enum.TextXAlignment.Center
-        Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 6)
-
-        _RS.Heartbeat:Connect(function()
-            pcall(function()
-                if f3Active then
-                    badge.TextColor3 = Color3.fromRGB(80, 255, 180)
-                    badge.Text = ("🧲 ATRAYENDO  %d piezas | r=%d"):format(#f3Parts, ORBIT_RADIUS)
-                else
-                    badge.TextColor3 = Color3.fromRGB(120, 120, 130)
-                    badge.Text = "🧲 F3 ATTRACTOR  [mantén F3]"
-                end
-            end)
-        end)
-    end)
-
-    print("[F3 ATTRACTOR] Cargado — mantén F3 para atraer piezas sueltas")
-end
--- ============================================================
--- FIN F3 ATTRACTOR
--- ============================================================
