@@ -234,6 +234,7 @@ local SavedConfig = {
     ESPActive = false,
     HeadlessActive = false,
     NoclipActive = false,
+    TestPlatformActive = false,
     ESPColor = {1, 1, 1}  -- RGB 0-1
 }
 
@@ -555,6 +556,42 @@ local LangData = {
         CatalogNew = "✨ NEW",
         CatalogFree = "🆓 FREE",
         CatalogAll = "📋 ALL",
+    },
+    pt = {
+        LangTitle = "Selecione seu idioma",
+        MadeBy = "Feito por PulpoNot_Found",
+        WelcomeM = "Bem-vindo, ",
+        WelcomeF = "Bem-vinda, ",
+        Hello = "Olá, ",
+        MenuTitle = "PULPI V13.5",
+        TkTitle = "🔮 PAINEL FLING",
+        HuntTitle = "🪐 TOXIC HUNTER 🔪",
+        AnnounceTitle = "📢 ANUNCIADOR",
+        CatalogTitle = "🎭 CATÁLOGO DE EMOTES",
+        Speed = "VELOCIDADE",
+        Jump = "PULO",
+        FlySpeed = "VELOCIDADE DE VOO",
+        Radius = "RAIO",
+        Headless = "FE HEADLESS",
+        FlyBtn = "VOAR",
+        EspBtn = "ESP",
+        FlingMenuBtn = "PAINEL FLING",
+        HuntMenuBtn = "TOXIC HUNTER 🪐",
+        AnnounceMenuBtn = "ANÚNCIO GLOBAL 📢",
+        CatalogMenuBtn = "🎭 CATÁLOGO DE EMOTES",
+        GrabBtn = "PEGAR (MIRA)",
+        DropBtn = "SOLTAR",
+        FlingShoot = "🔥 FLING! 🔥",
+        RefreshList = "🔄 ATUALIZAR LISTA",
+        StopHunt = "🟢 PARAR CAÇA",
+        CatalogLoad = "⏳ CARREGANDO...",
+        CatalogNext = "PRÓXIMO ▶",
+        CatalogPrev = "◀ ANTERIOR",
+        CatalogStop = "⏹ PARAR EMOTE",
+        CatalogSearch = "🔍 Buscar emote...",
+        CatalogNew = "✨ NOVO",
+        CatalogFree = "🆓 GRÁTIS",
+        CatalogAll = "📋 TUDO",
     }
 }
 
@@ -778,7 +815,7 @@ local function showLangSelector(callback)
     bg.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
     bg.BackgroundTransparency = 0.3
     local panel = Instance.new("Frame", bg)
-    panel.Size = isMobile and UDim2.fromScale(0.6, 0.4) or UDim2.fromScale(0.3, 0.35)
+    panel.Size = isMobile and UDim2.fromScale(0.6, 0.5) or UDim2.fromScale(0.3, 0.42)
     panel.Position = UDim2.fromScale(0.5, 0.5)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
@@ -800,14 +837,23 @@ local function showLangSelector(callback)
     btnEs.TextScaled = true
     Instance.new("UICorner", btnEs)
     local btnEn = Instance.new("TextButton", panel)
-    btnEn.Size = UDim2.fromScale(0.8, 0.25)
-    btnEn.Position = UDim2.fromScale(0.1, 0.65)
+    btnEn.Size = UDim2.fromScale(0.8, 0.18)
+    btnEn.Position = UDim2.fromScale(0.1, 0.46)
     btnEn.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
     btnEn.Text = "🇺🇸 English"
     btnEn.TextColor3 = Color3.new(1,1,1)
     btnEn.Font = Enum.Font.GothamBold
     btnEn.TextScaled = true
     Instance.new("UICorner", btnEn)
+    local btnPt = Instance.new("TextButton", panel)
+    btnPt.Size = UDim2.fromScale(0.8, 0.18)
+    btnPt.Position = UDim2.fromScale(0.1, 0.70)
+    btnPt.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
+    btnPt.Text = "🇧🇷 Português"
+    btnPt.TextColor3 = Color3.new(1,1,1)
+    btnPt.Font = Enum.Font.GothamBold
+    btnPt.TextScaled = true
+    Instance.new("UICorner", btnPt)
     local function finalizeSelection(lang)
         SavedConfig.Lang = lang
         SaveData()
@@ -816,6 +862,7 @@ local function showLangSelector(callback)
     end
     btnEs.MouseButton1Click:Connect(function() finalizeSelection("es") end)
     btnEn.MouseButton1Click:Connect(function() finalizeSelection("en") end)
+    btnPt.MouseButton1Click:Connect(function() finalizeSelection("pt") end)
 end
 
 -- ==========================================
@@ -1194,6 +1241,74 @@ local function SendChatMessage(message)
     end)
 end
 
+
+-- ==========================================
+-- [ TEST PLATFORM / CHARACTER SUPPORT ]
+-- Solo para test mode: crea una plataforma bajo los pies
+-- ==========================================
+local testPlatformPart = nil
+local testPlatformConn = nil
+local testPlatformOffsetY = -4.1
+
+local function setTestPlatform(state)
+    SavedConfig.TestPlatformActive = state and true or false
+    SaveData()
+
+    if testPlatformConn then
+        testPlatformConn:Disconnect()
+        testPlatformConn = nil
+    end
+    if testPlatformPart then
+        testPlatformPart:Destroy()
+        testPlatformPart = nil
+    end
+
+    if not state then return end
+
+    testPlatformPart = Instance.new("Part")
+    testPlatformPart.Name = "PULPI_TEST_PLATFORM"
+    testPlatformPart.Anchored = true
+    testPlatformPart.CanCollide = true
+    testPlatformPart.CanTouch = true
+    testPlatformPart.CanQuery = false
+    testPlatformPart.Material = Enum.Material.SmoothPlastic
+    testPlatformPart.Color = Color3.fromRGB(185, 185, 195)
+    testPlatformPart.Transparency = 0.15
+    testPlatformPart.Size = Vector3.new(8, 1, 8)
+    testPlatformPart.TopSurface = Enum.SurfaceType.Smooth
+    testPlatformPart.BottomSurface = Enum.SurfaceType.Smooth
+    testPlatformPart.Parent = Workspace
+
+    local function updatePlatform()
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum or hum.Health <= 0 then
+            if testPlatformPart then
+                testPlatformPart.CFrame = CFrame.new(0, -9999, 0)
+            end
+            return
+        end
+
+        local moveDir = hum.MoveDirection
+        local look = root.CFrame.LookVector
+        local ahead = Vector3.zero
+        if moveDir.Magnitude > 0.05 then
+            ahead = Vector3.new(moveDir.X, 0, moveDir.Z).Unit * 1.8
+        else
+            ahead = Vector3.new(look.X, 0, look.Z).Unit * 0.6
+        end
+
+        local targetPos = root.Position + ahead + Vector3.new(0, testPlatformOffsetY, 0)
+        testPlatformPart.CFrame = CFrame.new(targetPos)
+    end
+
+    updatePlatform()
+    testPlatformConn = RunService.Heartbeat:Connect(function()
+        if not SavedConfig.TestPlatformActive then return end
+        updatePlatform()
+    end)
+end
 
 -- ==========================================
 -- [ HELPERS DE PERSONAJE ]
@@ -2230,14 +2345,24 @@ local function buildAndOrchestrate()
             TweenService:Create(tmKnob, TweenInfo.new(0.15), {Position = testModeOn
                 and UDim2.new(1, -(isMobile and 15 or 12), 0.5, -(isMobile and 6 or 5))
                 or  UDim2.new(0, 2, 0.5, -(isMobile and 6 or 5))}):Play()
-            -- Auto-activar FE Headless al entrar en test mode, desactivar al salir
-            pcall(function() toggleHeadlessFE(testModeOn) end)
-            -- Mostrar u ocultar la opción FPS Optimize y Themes
+                        -- Mostrar/ocultar opciones solo de test mode
             if fpsOptRow then
                 fpsOptRow.Visible = testModeOn
             end
             if _G._PULPI_themesSection then
                 _G._PULPI_themesSection.Visible = testModeOn
+            end
+            if _G._PULPI_testHeadlessRow then
+                _G._PULPI_testHeadlessRow.Visible = testModeOn
+            end
+            if _G._PULPI_testR6Row then
+                _G._PULPI_testR6Row.Visible = testModeOn
+            end
+            if _G._PULPI_testPlatformRow then
+                _G._PULPI_testPlatformRow.Visible = testModeOn
+            end
+            if not testModeOn and SavedConfig.TestPlatformActive then
+                pcall(function() setTestPlatform(false) end)
             end
         end
     end)
@@ -2890,24 +3015,10 @@ local function buildAndOrchestrate()
     subLblR.TextXAlignment = Enum.TextXAlignment.Left
     subLblR.TextTruncate = Enum.TextTruncate.AtEnd
 
-    -- Al presionar la foto → toggle R6 page (abre/cierra)
-    local lastTabBeforeR6 = 1
+    -- Al presionar la foto → volver a Player
     profileBtn.MouseButton1Click:Connect(function()
-        if currentTab == 0 then
-            -- R6 ya abierta → cerrar y volver al último tab
-            pgR6.Visible = false
-            selectTab(lastTabBeforeR6)
-        else
-            -- Abrir R6 → deseleccionar tabs normales visualmente
-            lastTabBeforeR6 = currentTab
-            for i, btn in ipairs(sideButtons) do
-                TweenService:Create(btn, TweenInfo.new(0.12), {BackgroundTransparency = 1}):Play()
-                btn:FindFirstChild("SelBar").Visible = false
-            end
-            for _, pg in ipairs(pages) do pg.Visible = false end
-            pgR6.Visible = true
-            currentTab = 0
-        end
+        if pgR6 then pgR6.Visible = false end
+        selectTab(1)
     end)
 
     -- selectTab inicial
@@ -3652,6 +3763,56 @@ local function buildAndOrchestrate()
             manageNoclip(state)
         end)
 
+        makeSectionHeader(pg1, "Test")
+        local headlessRow = makeToggleRow(pg1, "Headless", "Solo visible en Test Mode", SavedConfig.HeadlessActive, function(state)
+            if not testModeOn then
+                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                pcall(function() toggleHeadlessFE(false) end)
+                return
+            end
+            toggleHeadlessFE(state)
+        end)
+        _G._PULPI_testHeadlessRow = headlessRow
+        headlessRow.Visible = false
+
+        local r6Row = makeToggleRow(pg1, "R6 Force", "Solo visible en Test Mode", false, function(state)
+            if not testModeOn then
+                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
+                r6Active = false
+                return
+            end
+            r6Active = state
+            if state then
+                pcall(function()
+                    loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
+                end)
+                if r6RespawnConn then r6RespawnConn:Disconnect() end
+                r6RespawnConn = player.CharacterAdded:Connect(function()
+                    if not r6Active then return end
+                    task.wait(1.5)
+                    pcall(function()
+                        loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
+                    end)
+                end)
+            else
+                if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
+            end
+        end)
+        _G._PULPI_testR6Row = r6Row
+        r6Row.Visible = false
+
+        local platformRow = makeToggleRow(pg1, "Character Platform", "Bloque bajo tus pies solo en Test Mode", SavedConfig.TestPlatformActive, function(state)
+            if state and not testModeOn then
+                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                pcall(function() setTestPlatform(false) end)
+                return
+            end
+            setTestPlatform(state)
+        end)
+        _G._PULPI_testPlatformRow = platformRow
+        platformRow.Visible = false
+
         -- ══ PAGE 2: TROLL ════════════════════════════════════════
         local pg2 = pages[2]
         makePageTitle(pg2, "Troll", "Herramientas para interactuar con otros jugadores.")
@@ -3982,7 +4143,7 @@ local function buildAndOrchestrate()
                 applyTheme(capturedTh)
             end)
         end
-        makePageTitle(pgR6, "R6 Force", "Fuerza rig R6 al personaje cada respawn.")
+        makePageTitle(pgR6, "R6 Force", "Legacy page.")
 
         -- Slider de escala (1-10) — representativo, ajusta un parámetro visual
         local r6ScaleRow = makeSliderRow(pgR6, "WalkSpeed", "Escala visual", 1, 10, function() end)
@@ -4038,27 +4199,45 @@ local function buildAndOrchestrate()
 
         -- ══ PAGE 4: CMD ════════════════════════════════════════════
         local pg4 = pages[4]
-        makePageTitle(pg4, "CMD", "Terminal de comandos integrado.")
-        makeActionRow(pg4, "🖥", "CMD Terminal", "Abre el terminal de comandos (/help para ver lista)", Color3.fromRGB(0, 160, 60), function()
+        makePageTitle(pg4, "CMD", SavedConfig.Lang == "en" and "Integrated command terminal." or (SavedConfig.Lang == "pt" and "Terminal de comandos integrado." or "Terminal de comandos integrado."))
+        makeActionRow(pg4, "🖥", SavedConfig.Lang == "en" and "CMD Terminal" or (SavedConfig.Lang == "pt" and "Terminal CMD" or "Terminal CMD"), SavedConfig.Lang == "en" and "Open the command terminal (/help)" or (SavedConfig.Lang == "pt" and "Abre o terminal de comandos (/help)" or "Abre el terminal de comandos (/ayuda)"), Color3.fromRGB(0, 160, 60), function()
             if typeof(_G.PULPI_toggleCmd) == "function" then _G.PULPI_toggleCmd() end
         end)
-        makeSectionHeader(pg4, "Commands reference")
-        local cmdRef = {
-            {"/nds",         "Toggle NDS fly/fall damage bypass"},
-            {"/god",         "Max health + regen loop"},
-            {"/allreset",    "Reset graphics, lighting & script"},
-            {"/kill",        "Kill your character"},
-            {"/respawn",     "Force respawn"},
-            {"/pos",         "Print current position"},
-            {"/fps",         "Show current FPS"},
-            {"/ping",        "Check server latency"},
-            {"/force",       "Anchored + CanCollide en workspace"},
-            {"/weaponesp",   "Escanea handles de daño → ESP rojo"},
-            {"/jumpemote",   "Loop del emote activo"},
-            {"/disablejumpemote", "Detiene loop de emote"},
-            {"/clear",       "Clear the console"},
-            {"/help",        "Show all commands"},
-        }
+        makeSectionHeader(pg4, SavedConfig.Lang == "en" and "Command reference" or (SavedConfig.Lang == "pt" and "Referência de comandos" or "Referencia de comandos"))
+        local cmdRef = SavedConfig.Lang == "en" and {
+            {"/nds", "Toggle NDS protection"},
+            {"/god", "Max health + regen loop"},
+            {"/allreset", "Reset graphics, lighting & script"},
+            {"/kill", "Kill your character"},
+            {"/respawn", "Force respawn"},
+            {"/pos", "Print current position"},
+            {"/fps", "Show current FPS"},
+            {"/ping", "Check server latency"},
+            {"/clear", "Clear the console"},
+            {"/help", "Show commands"},
+        } or (SavedConfig.Lang == "pt" and {
+            {"/nds", "Alterna proteção NDS"},
+            {"/god", "Vida máxima + regeneração"},
+            {"/allreset", "Restaura gráficos, luz e script"},
+            {"/kill", "Mata seu personagem"},
+            {"/respawn", "Força respawn"},
+            {"/pos", "Mostra sua posição"},
+            {"/fps", "Mostra o FPS atual"},
+            {"/ping", "Verifica a latência"},
+            {"/clear", "Limpa o console"},
+            {"/help", "Mostra os comandos"},
+        } or {
+            {"/nds", "Activa o desactiva protección NDS"},
+            {"/god", "Vida máxima + regeneración"},
+            {"/allreset", "Reinicia gráficos, luces y script"},
+            {"/kill", "Mata tu personaje"},
+            {"/respawn", "Fuerza respawn"},
+            {"/pos", "Muestra tu posición actual"},
+            {"/fps", "Muestra el FPS actual"},
+            {"/ping", "Revisa la latencia"},
+            {"/limpiar", "Limpia la consola"},
+            {"/ayuda", "Muestra los comandos"},
+        })
         for _, pair in ipairs(cmdRef) do
             local refRow = Instance.new("Frame", pg4)
             refRow.Size = UDim2.new(1, 0, 0, isMobile and 36 or 28)
@@ -4179,6 +4358,7 @@ local function buildAndOrchestrate()
     applySpeedAndJump()
     if SavedConfig.FlyActive then manageFlight(true) end
     if SavedConfig.HeadlessActive then toggleHeadlessFE(true) end
+    if SavedConfig.TestPlatformActive then setTestPlatform(true) end
     if SavedConfig.ESPActive then manageESP(true) end
 
     handleMenuToggle()
@@ -8913,87 +9093,55 @@ task.spawn(function()
     end
 
     -- ── Command parser ────────────────────────────────
-    local HELP_TEXT = {
-        "┌─────────────────────────────────────┐",
-        "│        PULPI CMD  — COMMANDS         │",
-        "├─────────────────────────────────────┤",
-        "│ /gender <nb|male|female>             │",
-        "│   Set display pronouns               │",
-        "├─────────────────────────────────────┤",
-        "│ /language <en|es>                    │",
-        "│   Switch script language             │",
-        "├─────────────────────────────────────┤",
-        "│ /nds                                 │",
-        "│   Toggle NDS fly/fall damage bypass  │",
-        "├─────────────────────────────────────┤",
-        "│ /allreset                            │",
-        "│   Reset graphics, lighting & script  │",
-        "├─────────────────────────────────────┤",
-        "│ /luau                                │",
-        "│   Open/close Luau executor           │",
-        "├─────────────────────────────────────┤",
-        "│ /me                                  │",
-        "│   Show player info                   │",
-        "├─────────────────────────────────────┤",
-        "│ /ping                                │",
-        "│   Check server latency               │",
-        "├─────────────────────────────────────┤",
-        "│ /clear                               │",
-        "│   Clear the console                  │",
-        "├─────────────────────────────────────┤",
-        "│ /kill                                │",
-        "│   Kill your character                │",
-        "├─────────────────────────────────────┤",
-        "│ /respawn                             │",
-        "│   Force respawn                      │",
-        "├─────────────────────────────────────┤",
-        "│ /god                                 │",
-        "│   Max health + regen loop            │",
-        "├─────────────────────────────────────┤",
-        "│ /pos                                 │",
-        "│   Print your current position        │",
-        "├─────────────────────────────────────┤",
-        "│ /fps                                 │",
-        "│   Show current FPS                   │",
-        "├─────────────────────────────────────┤",
-        "│ /force                               │",
-        "│   Anchored+CanCollide=true a todo    │",
-        "│   el workspace (1 sola vez)          │",
-        "│   (Error si /parts está activo)      │",
-        "├─────────────────────────────────────┤",
-        "│ /parts                               │",
-        "│   GUI para mover piezas sueltas      │",
-        "│   LClick=agarrar  RClick=soltar      │",
-        "├─────────────────────────────────────┤",
-        "│ /weaponesp                           │",
-        "│   Escanea workspace: jugadores con   │",
-        "│   Handle de daño → ESP rojo          │",
-        "│   Segunda vez = limpiar marcas       │",
-        "├─────────────────────────────────────┤",
-        "│ /join <username>                     │",
-        "│   Únete al servidor de ese jugador   │",
-        "├─────────────────────────────────────┤",
-        "│ /joinserv <jobId> [placeId]          │",
-        "│   Únete a un server por su ID        │",
-        "├─────────────────────────────────────┤",
-        "│ /font                                │",
-        "│   Abre selector de archivo .ttf      │",
-        "│   (guarda en fonts/ del executor)    │",
-        "├─────────────────────────────────────┤",
-        "│ /fonts                               │",
-        "│   Lista fuentes en carpeta fonts/    │",
-        "│   Click en nombre para aplicarla     │",
-        "├─────────────────────────────────────┤",
-        "│ /device                              │",
-        "│   OS, CPU, modelo, res, executor     │",
-        "├─────────────────────────────────────┤",
-        "│ /closeall                            │",
-        "│   Cierra todo y reinicia el script   │",
-        "├─────────────────────────────────────┤",
-        "│ /help                                │",
-        "│   Show this list                     │",
-        "└─────────────────────────────────────┘",
-    }
+    local function buildHelpText(langCode)
+        langCode = (langCode or SavedConfig.Lang or "es"):lower()
+        if langCode == "pt" or langCode == "portuguese" or langCode == "portugues" then
+            return {
+                "┌─────────────────────────────────────┐",
+                "│        PULPI CMD — COMANDOS          │",
+                "├─────────────────────────────────────┤",
+                "│ /language <pt|en|es>                 │",
+                "│   Troca o idioma do script           │",
+                "├─────────────────────────────────────┤",
+                "│ /clear                               │",
+                "│   Limpa o console                    │",
+                "├─────────────────────────────────────┤",
+                "│ /help                                │",
+                "│   Mostra esta lista                  │",
+                "└─────────────────────────────────────┘",
+            }
+        elseif langCode == "en" or langCode == "english" then
+            return {
+                "┌─────────────────────────────────────┐",
+                "│        PULPI CMD — COMMANDS          │",
+                "├─────────────────────────────────────┤",
+                "│ /language <en|es|pt>                 │",
+                "│   Switch script language             │",
+                "├─────────────────────────────────────┤",
+                "│ /clear                               │",
+                "│   Clear the console                  │",
+                "├─────────────────────────────────────┤",
+                "│ /help                                │",
+                "│   Show this list                     │",
+                "└─────────────────────────────────────┘",
+            }
+        else
+            return {
+                "┌─────────────────────────────────────┐",
+                "│        PULPI CMD — COMANDOS          │",
+                "├─────────────────────────────────────┤",
+                "│ /idioma <es|en|pt>                   │",
+                "│   Cambia el idioma del script        │",
+                "├─────────────────────────────────────┤",
+                "│ /limpiar                             │",
+                "│   Limpia la consola                  │",
+                "├─────────────────────────────────────┤",
+                "│ /ayuda                               │",
+                "│   Muestra esta lista                 │",
+                "└─────────────────────────────────────┘",
+            }
+        end
+    end
 
     local godActive = false
     local godConn   = nil
@@ -9014,8 +9162,8 @@ task.spawn(function()
         local arg1 = (parts[2] or ""):lower()
 
         -- /help
-        if cmd == "/help" then
-            for _, l in ipairs(HELP_TEXT) do log(l, "info") end
+        if cmd == "/help" or cmd == "/ayuda" then
+            for _, l in ipairs(buildHelpText(cmdLang or SavedConfig.Lang)) do log(l, "info") end
 
         -- /gender
         elseif cmd == "/gender" then
@@ -9029,18 +9177,35 @@ task.spawn(function()
             end
 
         -- /language
-        elseif cmd == "/language" then
-            if arg1 ~= "en" and arg1 ~= "es" and arg1 ~= "english" and arg1 ~= "spanish" then
-                log("Usage: /language <en | es>", "warn")
+        elseif cmd == "/language" or cmd == "/idioma" or cmd == "/lenguaje" then
+            if arg1 ~= "en" and arg1 ~= "es" and arg1 ~= "pt" and arg1 ~= "english" and arg1 ~= "spanish" and arg1 ~= "espanol" and arg1 ~= "español" and arg1 ~= "portuguese" and arg1 ~= "portugues" and arg1 ~= "português" then
+                if (cmdLang or SavedConfig.Lang) == "en" then
+                    log("Usage: /language <en | es | pt>", "warn")
+                elseif (cmdLang or SavedConfig.Lang) == "pt" then
+                    log("Uso: /language <pt | en | es>", "warn")
+                else
+                    log("Uso: /idioma <es | en | pt>", "warn")
+                end
             else
-                local mapped = (arg1 == "english") and "en" or (arg1 == "spanish") and "es" or arg1
+                local mapped = arg1
+                if arg1 == "english" then mapped = "en" end
+                if arg1 == "spanish" or arg1 == "espanol" or arg1 == "español" then mapped = "es" end
+                if arg1 == "portuguese" or arg1 == "portugues" or arg1 == "português" then mapped = "pt" end
                 if SavedConfig then
                     SavedConfig.Lang = mapped
                     pcall(SaveData)
                 end
                 cmdLang = mapped
-                log("Language set to: " .. (mapped == "en" and "English" or "Español"), "ok")
-                log("Restart the script to see full effect.", "warn")
+                if mapped == "en" then
+                    log("Language set to: English", "ok")
+                    log("Restart the script to see the full effect.", "warn")
+                elseif mapped == "pt" then
+                    log("Idioma alterado para: Português", "ok")
+                    log("Reinicie o script para ver o efeito completo.", "warn")
+                else
+                    log("Idioma cambiado a: Español", "ok")
+                    log("Reinicia el script para ver todo el efecto.", "warn")
+                end
             end
 
         -- /nds
@@ -9121,7 +9286,7 @@ task.spawn(function()
             else log("Ping: unavailable in this executor", "warn") end
 
         -- /clear
-        elseif cmd == "/clear" then
+        elseif cmd == "/clear" or cmd == "/limpiar" then
             for _, c in pairs(logFrame:GetChildren()) do
                 if c:IsA("TextLabel") then c:Destroy() end
             end
