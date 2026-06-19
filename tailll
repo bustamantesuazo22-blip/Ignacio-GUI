@@ -1,0 +1,714 @@
+-- ╔══════════════════════════════════════════════════╗
+-- ║               TrailFX — LocalScript  v7           ║
+-- ║  StarterPlayerScripts · Executor compatible       ║
+-- ║  Toggle UI: Tecla Y   |  Click Derecho p/ borrar  ║
+-- ╚══════════════════════════════════════════════════╝
+
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+
+local player    = Players.LocalPlayer
+local playerGui = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui", 15)
+
+if not playerGui then
+    warn("TrailFX Error: No se pudo encontrar el PlayerGui.")
+    return
+end
+
+-- ─── Style tokens ────────────────────────────────────
+local BG_DARK     = Color3.fromRGB(11, 11, 14)
+local PANEL_BG    = Color3.fromRGB(18, 18, 24)
+local ACCENT      = Color3.fromRGB(192, 132, 252)
+local SLOT_EMPTY  = Color3.fromRGB(32, 32, 40)
+local BTN_PRIMARY = Color3.fromRGB(109, 40,  217)
+local BTN_HOVER   = Color3.fromRGB(147, 72,  247)
+local BTN_SEC     = Color3.fromRGB(38,  38,  52)
+local BTN_SEC_HOV = Color3.fromRGB(58,  58,  75)
+
+-- ─── Trail / color state ─────────────────────────────
+local colorSlots      = { Color3.fromRGB(192, 132, 252) }
+local currentColorSeq = ColorSequence.new(colorSlots[1])
+local currentTrail    = nil
+local currentAttachments = nil -- {a0, a1} para updates en vivo
+local selectedSlot    = 1
+local isLimited       = false
+local shiftTime       = 0
+local H, S, V         = Color3.toHSV(colorSlots[1])
+
+-- Variables de Control Dinámico (Forma y Opacidad)
+local trailWidthGlobal       = 0.9    -- grosor por defecto
+local trailTransparencyGlobal = 0.0   -- 0 = opaco, 1 = invisible (controlado por slider superior)
+local favoritesList          = { [1] = nil, [2] = nil, [3] = nil }
+
+-- Control de altura del trail (span): separación vertical entre attachments
+local defaultSpan = 1.2
+local trailHeightSpan = defaultSpan
+local minSpan = 0.2
+local maxSpan = defaultSpan * 2 -- ahora el máximo es el doble del span por defecto
+
+-- Centro vertical del ribbon (permanece ajustable si se quiere)
+local trailCenterY = 0.3
+
+-- Rango vertical para el centro (no tocado, puede ajustarse)
+local centerMinY, centerMaxY = -0.5, 1.4
+
+-- ─── Presets Database (Colores Sólidos de Alta Definición) ───
+local PRESETS = {
+    ["Rainbow Clásico"] = {Color3.fromRGB(255,0,0), Color3.fromRGB(255,127,0), Color3.fromRGB(255,255,0), Color3.fromRGB(0,255,0), Color3.fromRGB(0,0,255), Color3.fromRGB(148,0,211)},
+    ["Neon Cyber"]      = {Color3.fromRGB(0,255,255), Color3.fromRGB(255,0,255), Color3.fromRGB(0,255,128)},
+    ["Sunset Glow"]     = {Color3.fromRGB(255,94,98), Color3.fromRGB(255,153,102), Color3.fromRGB(133,75,191)},
+    ["Gay Pride"]       = {Color3.fromRGB(228,3,3), Color3.fromRGB(255,140,0), Color3.fromRGB(255,237,0), Color3.fromRGB(0,128,38), Color3.fromRGB(0,77,255), Color3.fromRGB(117,7,135)},
+    ["Lesbian"]         = {Color3.fromRGB(213,45,0), Color3.fromRGB(239,118,39), Color3.fromRGB(255,255,255), Color3.fromRGB(209,98,164), Color3.fromRGB(163,2,98)},
+    ["Transgender"]     = {Color3.fromRGB(91,206,250), Color3.fromRGB(245,169,184), Color3.fromRGB(255,255,255), Color3.fromRGB(245,169,184), Color3.fromRGB(91,206,250)},
+    ["Bisexual"]        = {Color3.fromRGB(214,2,112), Color3.fromRGB(155,79,150), Color3.fromRGB(0,56,168)},
+    ["Pansexual"]       = {Color3.fromRGB(255,27,141), Color3.fromRGB(255,218,0), Color3.fromRGB(27,179,255)},
+    ["Non-Binary"]      = {Color3.fromRGB(252,244,52), Color3.fromRGB(255,255,255), Color3.fromRGB(156,89,209), Color3.fromRGB(44,44,44)}
+}
+
+-- ─── Helpers ─────────────────────────────────────────
+local function buildColorSequence(slots)
+    if #slots == 0 then return ColorSequence.new(Color3.new(1,1,1)) end
+    if #slots == 1 then return ColorSequence.new(slots[1]) end
+    local kp = {}
+    for i, c in ipairs(slots) do
+        kp[i] = ColorSequenceKeypoint.new((i-1) / (#slots-1), c)
+    end
+    return ColorSequence.new(kp)
+end
+
+local function updateAttachmentsPositions()
+    if not currentAttachments then return end
+    local a0, a1 = currentAttachments[1], currentAttachments[2]
+    if not a0 or not a1 then return end
+    local half = trailHeightSpan * 0.5
+    a0.Position = Vector3.new(0, trailCenterY + half, -0.10)
+    a1.Position = Vector3.new(0, trailCenterY - half, -0.10)
+end
+
+local function updateTrailTransparency()
+    if not currentTrail then return end
+    -- Transparencia usa NumberSequence; mantenemos la nitidez hasta 98%
+    currentTrail.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, trailTransparencyGlobal),
+        NumberSequenceKeypoint.new(0.98, trailTransparencyGlobal),
+        NumberSequenceKeypoint.new(1, 1.0)
+    })
+end
+
+-- ─── Trail Attachment ────────────────────────────────
+local function attachTrail(char)
+    if currentTrail then
+        pcall(function() currentTrail:Destroy() end)
+        currentTrail = nil
+        currentAttachments = nil
+    end
+
+    local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("HumanoidRootPart")
+    if not torso then return end
+
+    for _, v in ipairs(torso:GetChildren()) do
+        if v.Name:sub(1,4) == "_TFX" then v:Destroy() end
+    end
+
+    local a0 = Instance.new("Attachment")
+    a0.Name    = "_TFX_a0"
+    local half = trailHeightSpan * 0.5
+    a0.Position = Vector3.new(0, trailCenterY + half, -0.10)
+    a0.Parent   = torso
+
+    local a1 = Instance.new("Attachment")
+    a1.Name    = "_TFX_a1"
+    a1.Position = Vector3.new(0, trailCenterY - half, -0.10)
+    a1.Parent   = torso
+
+    local trail = Instance.new("Trail")
+    trail.Name           = "_TFX_Trail"
+    trail.Attachment0    = a0
+    trail.Attachment1    = a1
+    trail.Lifetime       = 0.75
+    trail.FaceCamera     = false
+    trail.MinLength      = 0.1  
+    trail.LightEmission  = 0.0
+    trail.LightInfluence = 0.0  
+    trail.Enabled        = true
+    trail.Texture        = ""
+
+    trail.WidthScale = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, trailWidthGlobal),
+        NumberSequenceKeypoint.new(0.98, trailWidthGlobal),
+        NumberSequenceKeypoint.new(1, trailWidthGlobal * 0.05)
+    })
+    trail.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, trailTransparencyGlobal),
+        NumberSequenceKeypoint.new(0.98, trailTransparencyGlobal),
+        NumberSequenceKeypoint.new(1, 1.0)
+    })
+
+    trail.Color           = currentColorSeq
+    trail.Parent          = torso
+    currentTrail          = trail
+    currentAttachments    = {a0, a1}
+end
+
+local function onCharacter(char)
+    task.wait(0.5)
+    attachTrail(char)
+end
+
+if player.Character then task.spawn(onCharacter, player.Character) end
+player.CharacterAdded:Connect(onCharacter)
+
+-- ══════════════════════════════════════════════════════
+--               INTERFAZ DE USUARIO (UI)
+-- ══════════════════════════════════════════════════════
+local old = playerGui:FindFirstChild("_TrailFX_Gui")
+if old then old:Destroy() end
+
+local sg = Instance.new("ScreenGui")
+sg.Name           = "_TrailFX_Gui"
+sg.ResetOnSpawn   = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+sg.Parent         = playerGui
+
+local WIN_W, WIN_H = 470, 425
+local win = Instance.new("Frame")
+win.Name                  = "MainWindow"
+win.Size                  = UDim2.new(0, WIN_W, 0, WIN_H)
+win.Position              = UDim2.new(0.5, -WIN_W/2, 0.5, -WIN_H/2)
+win.BackgroundColor3      = BG_DARK
+win.BackgroundTransparency = 0.08
+win.BorderSizePixel       = 0
+win.Parent                = sg
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,14); c.Parent = win
+    local s = Instance.new("UIStroke"); s.Color = ACCENT; s.Thickness = 1.4; s.Transparency = 0.3; s.Parent = win
+end
+
+local titleBar = Instance.new("Frame")
+titleBar.Size            = UDim2.new(1, 0, 0, 36)
+titleBar.BackgroundColor3 = Color3.fromRGB(18, 16, 26)
+titleBar.BorderSizePixel = 0
+titleBar.Parent          = win
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,14); c.Parent = titleBar
+    local fix = Instance.new("Frame")
+    fix.Size, fix.Position, fix.BorderSizePixel = UDim2.new(1,0,0.5,0), UDim2.new(0,0,0.5,0), 0
+    fix.BackgroundColor3 = Color3.fromRGB(18,16,26); fix.Parent = titleBar
+end
+
+local titleLbl = Instance.new("TextLabel")
+titleLbl.Text           = "✦  TRAIL FX STUDIO v7 — CRISP & SOLID"
+titleLbl.Size           = UDim2.new(1,-40, 1,0)
+titleLbl.Position       = UDim2.new(0,14, 0,0)
+titleLbl.BackgroundTransparency = 1; titleLbl.TextColor3 = Color3.fromRGB(230, 220, 255)
+titleLbl.Font = Enum.Font.GothamBold; titleLbl.TextSize = 11; titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+titleLbl.Parent = titleBar
+
+-- Arrastre y Atajo 'Y'
+local isDragging, dragStart, dragOrigin = false, nil, nil
+titleBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        isDragging = true; dragStart = inp.Position; dragOrigin = win.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(inp)
+    if isDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = inp.Position - dragStart
+        win.Position = UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset+d.X, dragOrigin.Y.Scale, dragOrigin.Y.Offset+d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+end)
+UserInputService.InputBegan:Connect(function(inp, eaten)
+    if not eaten and inp.KeyCode == Enum.KeyCode.Y then win.Visible = not win.Visible end
+end)
+
+-- ─── PANEL IZQUIERDO: RUEDA DE COLOR ─────────────────
+local WSIZE = 140
+local WR    = WSIZE / 2
+local leftPanel = Instance.new("Frame")
+leftPanel.Name = "LeftPanel"
+leftPanel.Size = UDim2.new(0, 180, 0, 230)
+leftPanel.Position = UDim2.new(0, 14, 0, 50)
+leftPanel.BackgroundTransparency = 1
+leftPanel.Parent = win
+
+local wheelCanvas = Instance.new("Frame")
+wheelCanvas.Size = UDim2.new(0, WSIZE, 0, WSIZE)
+wheelCanvas.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+wheelCanvas.BorderSizePixel = 0; wheelCanvas.ClipsDescendants = true; wheelCanvas.Parent = leftPanel
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = wheelCanvas end
+
+do
+    local GRID = 25
+    local CELL = WSIZE / GRID
+    for row = 0, GRID - 1 do
+        for col = 0, GRID - 1 do
+            local nx, ny = (col + 0.5) / GRID - 0.5, (row + 0.5) / GRID - 0.5
+            local dist = math.sqrt(nx*nx + ny*ny)
+            if dist <= 0.5 then
+                local h = (math.atan2(-ny, nx) / (2*math.pi) + 1) % 1
+                local s = math.min(dist * 2, 1)
+                local cell = Instance.new("Frame")
+                cell.Size = UDim2.new(0, math.ceil(CELL)+1, 0, math.ceil(CELL)+1)
+                cell.Position = UDim2.new(0, col*CELL, 0, row*CELL)
+                cell.BackgroundColor3 = Color3.fromHSV(h, s, 1)
+                cell.BorderSizePixel = 0; cell.ZIndex = 2; cell.Parent = wheelCanvas
+            end
+        end
+    end
+end
+
+local wCursor = Instance.new("Frame")
+wCursor.Size = UDim2.new(0, 10, 0, 10); wCursor.Position = UDim2.new(0, WR-5, 0, WR-5)
+wCursor.BackgroundColor3 = Color3.fromRGB(255,255,255); wCursor.ZIndex = 10; wCursor.Parent = wheelCanvas
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = wCursor end
+
+local bBar = Instance.new("Frame")
+bBar.Size = UDim2.new(0, 14, 0, WSIZE); bBar.Position = UDim2.new(0, WSIZE + 12, 0, 0)
+bBar.BackgroundColor3 = Color3.fromRGB(255,255,255); bBar.BorderSizePixel = 0; bBar.Parent = leftPanel
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = bBar end
+
+local bGradient = Instance.new("UIGradient")
+bGradient.Rotation = 90; bGradient.Parent = bBar
+
+local bHandle = Instance.new("Frame")
+bHandle.Size = UDim2.new(1, 4, 0, 6); bHandle.Position = UDim2.new(0, -2, 0, (1-V)*(WSIZE-6))
+bHandle.BackgroundColor3 = Color3.fromRGB(255,255,255); bHandle.ZIndex = 8; bHandle.Parent = bBar
+
+local preview = Instance.new("Frame")
+preview.Size = UDim2.new(0, WSIZE + 26, 0, 20); preview.Position = UDim2.new(0, 0, 0, WSIZE + 10)
+preview.BackgroundColor3 = Color3.fromHSV(H,S,V); preview.Parent = leftPanel
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = preview
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(255,255,255); s.Transparency = 0.6; s.Parent = preview
+end
+
+-- ─── PANEL DERECHO: CONTROLES DE GEOMETRÍA Y VISIBILIDAD ───
+local rightScroll = Instance.new("ScrollingFrame")
+rightScroll.Size = UDim2.new(0, 250, 0, 230)
+rightScroll.Position = UDim2.new(0, 206, 0, 50)
+rightScroll.BackgroundTransparency = 0.4
+rightScroll.BackgroundColor3 = PANEL_BG
+rightScroll.BorderSizePixel = 0; rightScroll.CanvasSize = UDim2.new(0, 0, 0, 640)
+rightScroll.ScrollBarThickness = 4; rightScroll.ScrollBarImageColor3 = ACCENT; rightScroll.Parent = win
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = rightScroll
+    local l = Instance.new("UIListLayout"); l.Padding = UDim.new(0,6); l.HorizontalAlignment = Enum.HorizontalAlignment.Center; l.Parent = rightScroll
+end
+
+local function createHeader(text)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.9, 0, 0, 20); lbl.BackgroundTransparency = 1
+    lbl.Text = text; lbl.TextColor3 = ACCENT; lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 10
+    lbl.Parent = rightScroll
+end
+
+local function createSubLabel(text)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0.9, 0, 0, 12); lbl.BackgroundTransparency = 1
+    lbl.Text = text; lbl.TextColor3 = Color3.fromRGB(160, 160, 175); lbl.Font = Enum.Font.Gotham; lbl.TextSize = 9; lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = rightScroll
+end
+
+-- ─── SLIDER 1: OPACIDAD (arriba) ───────────────────────────────
+createHeader("— FORMA Y GEOMETRÍA —")
+createSubLabel("Opacidad: Transparente ◀▶ Sólido (slider superior)")
+local sliderContainer = Instance.new("Frame")
+sliderContainer.Size = UDim2.new(0.9, 0, 0, 20); sliderContainer.BackgroundTransparency = 1; sliderContainer.Parent = rightScroll
+
+local sliderBar = Instance.new("Frame")
+sliderBar.Size = UDim2.new(1, 0, 0, 6); sliderBar.Position = UDim2.new(0, 0, 0.5, -3); sliderBar.BackgroundColor3 = Color3.fromRGB(45, 45, 55); sliderBar.BorderSizePixel = 0; sliderBar.Parent = sliderContainer
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,3); c.Parent = sliderBar end
+
+local sliderFill = Instance.new("Frame")
+-- Inicial: reflect opacity (1 - trailTransparencyGlobal) so right = solid
+local initOpPct = 1 - trailTransparencyGlobal
+sliderFill.Size = UDim2.new(initOpPct, 0, 1, 0); sliderFill.BackgroundColor3 = ACCENT; sliderFill.BorderSizePixel = 0; sliderFill.Parent = sliderBar
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,3); c.Parent = sliderFill end
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.Size = UDim2.new(0, 14, 0, 14); sliderKnob.Position = UDim2.new(initOpPct, -7, 0.5, -7); sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255); sliderKnob.Parent = sliderBar
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = sliderKnob; local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(0,0,0); s.Thickness = 1; s.Parent = sliderKnob end
+
+local draggingSlider = false
+sliderKnob.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingSlider = true end end)
+
+-- ─── SLIDER 2: ALTURA MÁXIMA (abajo) ──────────────────────────────
+createSubLabel("Altura máxima: controla separación (slider inferior). Máx = doble del valor por defecto.")
+local opContainer = Instance.new("Frame")
+opContainer.Size = UDim2.new(0.9, 0, 0, 20); opContainer.BackgroundTransparency = 1; opContainer.Parent = rightScroll
+
+local opBar = Instance.new("Frame")
+opBar.Size = UDim2.new(1, 0, 0, 6); opBar.Position = UDim2.new(0, 0, 0.5, -3); opBar.BackgroundColor3 = Color3.fromRGB(45, 45, 55); opBar.BorderSizePixel = 0; opBar.Parent = opContainer
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,3); c.Parent = opBar end
+
+local opFill = Instance.new("Frame")
+-- Inicial: reflect current span (map min..maxSpan)
+local initSpanPct = (trailHeightSpan - minSpan) / (maxSpan - minSpan)
+opFill.Size = UDim2.new(initSpanPct, 0, 1, 0); opFill.BackgroundColor3 = ACCENT; opFill.BorderSizePixel = 0; opFill.Parent = opBar
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,3); c.Parent = opFill end
+
+local opKnob = Instance.new("Frame")
+opKnob.Size = UDim2.new(0, 14, 0, 14); opKnob.Position = UDim2.new(initSpanPct, -7, 0.5, -7); opKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255); opKnob.Parent = opBar
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = opKnob; local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(0,0,0); s.Thickness = 1; s.Parent = opKnob end
+
+local draggingOp = false
+opKnob.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingOp = true end end)
+
+-- Procesamiento seguro de inputs de Sliders
+UserInputService.InputChanged:Connect(function(inp)
+    if inp.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+    
+    if draggingSlider then
+        local pct = math.clamp((inp.Position.X - sliderBar.AbsolutePosition.X) / sliderBar.AbsoluteSize.X, 0, 1)
+        sliderKnob.Position = UDim2.new(pct, -7, 0.5, -7)
+        sliderFill.Size = UDim2.new(pct, 0, 1, 0)
+        -- Mapeo: pct = 0 (izq) => trail transparente (1.0), pct = 1 (der) => opaco (0.0)
+        trailTransparencyGlobal = 1.0 - pct
+        updateTrailTransparency()
+    elseif draggingOp then
+        local pct = math.clamp((inp.Position.X - opBar.AbsolutePosition.X) / opBar.AbsoluteSize.X, 0, 1)
+        opKnob.Position = UDim2.new(pct, -7, 0.5, -7)
+        opFill.Size = UDim2.new(pct, 0, 1, 0)
+        -- Mapeo: pct -> span entre minSpan .. maxSpan (maxSpan = doble del por defecto)
+        trailHeightSpan = minSpan + pct * (maxSpan - minSpan)
+        updateAttachmentsPositions()
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingSlider = false; draggingOp = false end
+end)
+
+-- Efectos Especiales / Limited
+createHeader("— EFECTOS ESPECIALES —")
+local limBtn = Instance.new("TextButton")
+limBtn.Size = UDim2.new(0.9, 0, 0, 26); limBtn.BackgroundColor3 = BTN_SEC
+limBtn.Text = "Efecto Limited: DESACTIVADO"; limBtn.TextColor3 = Color3.fromRGB(200,200,200)
+limBtn.Font = Enum.Font.GothamMedium; limBtn.TextSize = 10; limBtn.Parent = rightScroll
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = limBtn end
+
+local function liveUpdateTrail()
+    currentColorSeq = buildColorSequence(colorSlots)
+    if currentTrail and not isLimited then
+        currentTrail.Color = currentColorSeq
+    end
+end
+
+local updatePendingColor, updateSlots
+
+-- Carga Dinámica de Presets
+createHeader("— PRESETS CLÁSICOS —")
+local function loadPreset(colors)
+    table.clear(colorSlots)
+    for _, c in ipairs(colors) do table.insert(colorSlots, c) end
+    selectedSlot = 1
+    H, S, V = Color3.toHSV(colorSlots[1])
+    updateSlots()
+    updatePendingColor()
+    liveUpdateTrail()
+end
+
+for name, colors in pairs(PRESETS) do
+    if not name:find("Pride") and name ~= "Lesbian" and name ~= "Transgender" and name ~= "Bisexual" and name ~= "Pansexual" and name ~= "Non-Binary" then
+        local pBtn = Instance.new("TextButton")
+        pBtn.Size = UDim2.new(0.9, 0, 0, 22); pBtn.BackgroundColor3 = PANEL_BG; pBtn.Text = name
+        pBtn.TextColor3 = Color3.fromRGB(230,230,230); pBtn.Font = Enum.Font.Gotham; pBtn.TextSize = 10; pBtn.Parent = rightScroll
+        do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = pBtn end
+        pBtn.MouseButton1Click:Connect(function() loadPreset(colors) end)
+    end
+end
+
+createHeader("— CATEGORÍA LGBTQ+ —")
+for name, colors in pairs(PRESETS) do
+    if name:find("Pride") or name == "Lesbian" or name == "Transgender" or name == "Bisexual" or name == "Pansexual" or name == "Non-Binary" then
+        local pBtn = Instance.new("TextButton")
+        pBtn.Size = UDim2.new(0.9, 0, 0, 22); pBtn.BackgroundColor3 = PANEL_BG; pBtn.Text = name
+        pBtn.TextColor3 = Color3.fromRGB(240,220,255); pBtn.Font = Enum.Font.GothamMedium; pBtn.TextSize = 10; pBtn.Parent = rightScroll
+        do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = pBtn end
+        pBtn.MouseButton1Click:Connect(function() loadPreset(colors) end)
+    end
+end
+
+createHeader("— MIS FAVORITOS —")
+for i = 1, 3 do
+    local fRow = Instance.new("Frame")
+    fRow.Size = UDim2.new(0.9, 0, 0, 24); fRow.BackgroundTransparency = 1; fRow.Parent = rightScroll
+    
+    local sBtn = Instance.new("TextButton")
+    sBtn.Size = UDim2.new(0.48, 0, 1, 0); sBtn.BackgroundColor3 = Color3.fromRGB(30, 45, 35)
+    sBtn.Text = "Guardar " .. i; sBtn.TextColor3 = Color3.fromRGB(150,230,150); sBtn.Font = Enum.Font.Gotham; sBtn.TextSize = 10; sBtn.Parent = fRow
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = sBtn end
+    
+    local lBtn = Instance.new("TextButton")
+    lBtn.Size = UDim2.new(0.48, 0, 1, 0); lBtn.Position = UDim2.new(0.52, 0, 0, 0); lBtn.BackgroundColor3 = Color3.fromRGB(45, 35, 55)
+    lBtn.Text = "Cargar " .. i; lBtn.TextColor3 = Color3.fromRGB(200,160,255); lBtn.Font = Enum.Font.Gotham; lBtn.TextSize = 10; lBtn.Parent = fRow
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,4); c.Parent = lBtn end
+
+    sBtn.MouseButton1Click:Connect(function()
+        favoritesList[i] = { table.unpack(colorSlots) }
+        sBtn.Text = "¡Guardado!"
+        task.wait(0.8)
+        sBtn.Text = "Guardar " .. i
+    end)
+    
+    lBtn.MouseButton1Click:Connect(function()
+        if favoritesList[i] then loadPreset(favoritesList[i]) end
+    end)
+end
+
+-- ─── MATRIZ DE COLORES DE BAJO PANEL ─────────────────
+local slotRow = Instance.new("Frame")
+slotRow.Size = UDim2.new(1, -28, 0, 32); slotRow.Position = UDim2.new(0, 14, 0, 305)
+slotRow.BackgroundTransparency = 1; slotRow.Parent = win
+do
+    local sl = Instance.new("UIListLayout")
+    sl.FillDirection = Enum.FillDirection.Horizontal; sl.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    sl.Padding = UDim.new(0, 5); sl.Parent = slotRow
+end
+
+local slotBtns = {}
+
+updatePendingColor = function()
+    local c = Color3.fromHSV(H, S, V)
+    preview.BackgroundColor3 = c
+    bGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromHSV(H, S, 1)),
+        ColorSequenceKeypoint.new(1, Color3.new(0, 0, 0)),
+    })
+    if colorSlots[selectedSlot] then
+        colorSlots[selectedSlot] = c
+        if slotBtns[selectedSlot] then slotBtns[selectedSlot].BackgroundColor3 = c end
+    end
+    liveUpdateTrail()
+end
+
+updateSlots = function()
+    for i = 1, 10 do
+        local btn = slotBtns[i]
+        if not btn then continue end
+        local stroke = btn:FindFirstChildOfClass("UIStroke")
+        if colorSlots[i] then
+            btn.BackgroundColor3 = colorSlots[i]; btn.Text = ""
+            if stroke then
+                stroke.Color = (i == selectedSlot) and ACCENT or Color3.fromRGB(255,255,255)
+                stroke.Thickness = (i == selectedSlot) and 2 or 1
+                stroke.Transparency = (i == selectedSlot) and 0 or 0.6
+            end
+        else
+            btn.BackgroundColor3 = SLOT_EMPTY; btn.Text = "+"
+            if stroke then
+                stroke.Color = Color3.fromRGB(60, 60, 75); stroke.Thickness = 1; stroke.Transparency = 0
+            end
+        end
+    end
+end
+
+for i = 1, 10 do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 32, 0, 32); btn.BackgroundColor3 = SLOT_EMPTY
+    btn.TextColor3 = Color3.fromRGB(130, 130, 150); btn.Text = "+"; btn.Font = Enum.Font.GothamBold; btn.TextSize = 11
+    btn.BorderSizePixel = 0; btn.Parent = slotRow
+    do
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = btn
+        local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(60,60,75); s.Parent = btn
+    end
+    slotBtns[i] = btn
+
+    btn.MouseButton1Click:Connect(function()
+        if colorSlots[i] then
+            selectedSlot = i
+            H, S, V = Color3.toHSV(colorSlots[i])
+            local angle, r = H * math.pi * 2, S * WR
+            wCursor.Position = UDim2.new(0, math.cos(angle)*r + WR-5, 0, -math.sin(angle)*r + WR-5)
+            bHandle.Position = UDim2.new(0, -2, 0, (1-V)*(WSIZE-6))
+            updatePendingColor()
+        else
+            if i == #colorSlots + 1 and #colorSlots < 10 then
+                table.insert(colorSlots, Color3.fromHSV(H, S, V))
+                selectedSlot = #colorSlots
+            end
+        end
+        updateSlots()
+        liveUpdateTrail()
+    end)
+
+    btn.MouseButton2Click:Connect(function()
+        if colorSlots[i] and #colorSlots > 1 then
+            table.remove(colorSlots, i)
+            selectedSlot = math.min(selectedSlot, #colorSlots)
+            updateSlots()
+            liveUpdateTrail()
+        end
+    end)
+end
+
+-- ─── BOTONES DE REORGANIZACIÓN VISUAL ────────────────
+local btnRow = Instance.new("Frame")
+btnRow.Size = UDim2.new(1, -28, 0, 30); btnRow.Position = UDim2.new(0, 14, 0, 350)
+btnRow.BackgroundTransparency = 1; btnRow.Parent = win
+do
+    local bl = Instance.new("UIListLayout")
+    bl.FillDirection = Enum.FillDirection.Horizontal; bl.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    bl.Padding = UDim.new(0, 8); bl.Parent = btnRow
+end
+
+local function mkBtn(label, primary, width)
+    local b = Instance.new("TextButton")
+    b.Text = label; b.Size = UDim2.new(0, width or 80, 1, 0)
+    b.BackgroundColor3 = primary and BTN_PRIMARY or BTN_SEC
+    b.TextColor3 = Color3.fromRGB(245, 240, 255); b.Font = Enum.Font.GothamBold; b.TextSize = 10
+    b.BorderSizePixel = 0; b.Parent = btnRow
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = b end
+    b.MouseEnter:Connect(function() b.BackgroundColor3 = primary and BTN_HOVER or BTN_SEC_HOV end)
+    b.MouseLeave:Connect(function() b.BackgroundColor3 = primary and BTN_PRIMARY or BTN_SEC end)
+    return b
+end
+
+local mvLeft  = mkBtn("◀ Mover", false, 75)
+local mvRight = mkBtn("Mover ▶", false, 75)
+local addBtn  = mkBtn("＋ Color", false, 75)
+local clrBtn  = mkBtn("🗑 Limpiar", false, 75)
+local applyBtn= mkBtn("Forzar Reset ✓", true, 110)
+
+mvLeft.MouseButton1Click:Connect(function()
+    if selectedSlot > 1 and colorSlots[selectedSlot] then
+        local target = selectedSlot - 1
+        colorSlots[selectedSlot], colorSlots[target] = colorSlots[target], colorSlots[selectedSlot]
+        selectedSlot = target
+        updateSlots()
+        liveUpdateTrail()
+    end
+end)
+
+mvRight.MouseButton1Click:Connect(function()
+    if selectedSlot < #colorSlots and colorSlots[selectedSlot] then
+        local target = selectedSlot + 1
+        colorSlots[selectedSlot], colorSlots[target] = colorSlots[target], colorSlots[selectedSlot]
+        selectedSlot = target
+        updateSlots()
+        liveUpdateTrail()
+    end
+end)
+
+addBtn.MouseButton1Click:Connect(function()
+    if #colorSlots >= 10 then return end
+    table.insert(colorSlots, Color3.fromHSV(H, S, V))
+    selectedSlot = #colorSlots
+    updateSlots()
+    liveUpdateTrail()
+end)
+
+clrBtn.MouseButton1Click:Connect(function()
+    local baseColor = colorSlots[1] or Color3.fromRGB(255,255,255)
+    table.clear(colorSlots)
+    colorSlots[1] = baseColor
+    selectedSlot = 1
+    updateSlots()
+    liveUpdateTrail()
+end)
+
+applyBtn.MouseButton1Click:Connect(function()
+    if player.Character then attachTrail(player.Character) end
+    liveUpdateTrail()
+end)
+
+-- Lógica del Selector de Color
+local draggingWheel, draggingBright = false, false
+local function applyWheel(pos)
+    local ap, as = wheelCanvas.AbsolutePosition, wheelCanvas.AbsoluteSize
+    local dx, dy = pos.X - (ap.X + as.X/2), pos.Y - (ap.Y + as.Y/2)
+    H = (math.atan2(-dy, dx) / (2*math.pi) + 1) % 1
+    S = math.clamp(math.sqrt(dx*dx + dy*dy) / WR, 0, 1)
+    local angle, r = H * 2 * math.pi, S * WR
+    wCursor.Position = UDim2.new(0, math.cos(angle)*r + WR-5, 0, -math.sin(angle)*r + WR-5)
+    updatePendingColor()
+end
+
+local function applyBrightness(pos)
+    local ap, as = bBar.AbsolutePosition, bBar.AbsoluteSize
+    V = 1 - math.clamp((pos.Y - ap.Y) / as.Y, 0, 1)
+    bHandle.Position = UDim2.new(0, -2, 0, (1-V)*(WSIZE-6))
+    updatePendingColor()
+end
+
+wheelCanvas.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingWheel = true; applyWheel(inp.Position) end end)
+bBar.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingBright = true; applyBrightness(inp.Position) end end)
+UserInputService.InputChanged:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseMovement then if draggingWheel then applyWheel(inp.Position) elseif draggingBright then applyBrightness(inp.Position) end end end)
+UserInputService.InputEnded:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then draggingWheel, draggingBright = false, false end end)
+
+-- ─── BUCLE PRINCIPAL DE RENDERIZADO SÓLIDO (60 FPS) ───
+limBtn.MouseButton1Click:Connect(function()
+    isLimited = not isLimited
+    if isLimited then
+        limBtn.Text = "Efecto Limited: ACTIVO ✦"
+        limBtn.BackgroundColor3 = Color3.fromRGB(140, 50, 220)
+        limBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    else
+        limBtn.Text = "Efecto Limited: DESACTIVADO"
+        limBtn.BackgroundColor3 = BTN_SEC
+        limBtn.TextColor3 = Color3.fromRGB(200,200,200)
+        liveUpdateTrail()
+    end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+    if currentTrail and currentTrail.Parent then
+        pcall(function()
+            currentTrail.WidthScale = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, trailWidthGlobal),
+                NumberSequenceKeypoint.new(0.98, trailWidthGlobal), 
+                NumberSequenceKeypoint.new(1, trailWidthGlobal * 0.05)
+            })
+            -- Transparencia ya actualizada en updateTrailTransparency() cuando se mueve el slider
+        end)
+        
+        currentTrail.LightEmission  = 0.0
+        currentTrail.LightInfluence = 0.0
+
+        if isLimited and #colorSlots > 1 then
+            shiftTime = (shiftTime + dt * 1.5) % 1
+            local rawPoints = {}
+            for i, color in ipairs(colorSlots) do
+                local relativeTime = ((i - 1) / (#colorSlots - 1) + shiftTime) % 1
+                table.insert(rawPoints, {t = relativeTime, c = color})
+            end
+            table.sort(rawPoints, function(a, b) return a.t < b.t end)
+
+            local keypoints = {}
+            table.insert(keypoints, ColorSequenceKeypoint.new(0, rawPoints[#rawPoints].c))
+            for _, pt in ipairs(rawPoints) do
+                if pt.t > 0.001 and pt.t < 0.999 then
+                    table.insert(keypoints, ColorSequenceKeypoint.new(pt.t, pt.c))
+                end
+            end
+            table.insert(keypoints, ColorSequenceKeypoint.new(1, rawPoints[1].c))
+
+            local cleanKps = {}
+            local lastT = -1
+            for _, kp in ipairs(keypoints) do
+                if kp.Time - lastT > 0.006 or kp.Time == 0 or kp.Time == 1 then
+                    table.insert(cleanKps, kp)
+                    lastT = kp.Time
+                end
+            end
+            if #cleanKps < 2 then table.insert(cleanKps, ColorSequenceKeypoint.new(1, rawPoints[1].c)) end
+
+            pcall(function() currentTrail.Color = ColorSequence.new(cleanKps) end)
+            currentTrail.Lifetime = 0.75
+        else
+            currentTrail.Lifetime = 0.75
+        end
+    end
+end)
+
+-- Inicialización inicial limpia
+updatePendingColor()
+updateSlots()
+-- Asegurar que la transparencia y posiciones iniciales estén aplicadas si el trail ya existe
+updateTrailTransparency()
+updateAttachmentsPositions()
+print("¡TrailFX Studio v7 cargado! Slider superior = transparencia; slider inferior = altura (máx = doble del por defecto).")
