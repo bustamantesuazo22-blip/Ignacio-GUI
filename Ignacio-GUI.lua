@@ -243,7 +243,7 @@ local huntPanelActive = false
 local announcePanelActive = false
 local catalogPanelActive = false   -- NUEVO: estado del panel catálogo
 local headlessCache = {}
-local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil, noclip = nil}
+local connections = {fly = nil, esp = nil, tk = nil, hunt = nil, huntNoclip = nil, huntFace = nil, speedEnforce = nil, noclip = nil}
 local espColor = Color3.new(1, 1, 1)  -- color actual del ESP, sincronizado con SavedConfig
 
 -- ==========================================
@@ -1649,6 +1649,7 @@ local function stopHunt()
     hunting = false
     if connections.hunt         then connections.hunt:Disconnect();         connections.hunt         = nil end
     if connections.huntNoclip   then connections.huntNoclip:Disconnect();   connections.huntNoclip   = nil end
+    if connections.huntFace     then connections.huntFace:Disconnect();     connections.huntFace     = nil end
     if _huntRespawnConn         then _huntRespawnConn:Disconnect();         _huntRespawnConn         = nil end
     if _huntSelfRespawnConn     then _huntSelfRespawnConn:Disconnect();     _huntSelfRespawnConn     = nil end
     if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
@@ -1666,11 +1667,20 @@ local function stopHunt()
         end
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if hrp then
+            -- Quitar el giro del fling
+            for _, v in pairs(hrp:GetChildren()) do
+                if v:IsA("BodyAngularVelocity") and v.Name == "HUNT_FLING" then v:Destroy() end
+            end
             hrp.AssemblyLinearVelocity  = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end
+        -- Restaurar propiedades físicas (igual que 'unfling' de IY)
         for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = true end
+            if v:IsA("BasePart") then
+                v.CanCollide = true
+                v.Massless   = false
+                pcall(function() v.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.3, 0.5) end)
+            end
         end
     end)
     huntTarget = nil
@@ -1690,38 +1700,73 @@ local function startHunt(targetPlayer)
         })
     end)
 
+    -- Flag compartido: cuando es true el loop engancha en el siguiente frame
+    -- SIN esperar el throttle (se usa al arrancar y tras cada respawn de la víctima).
+    local _engageNow = true
+
     -- ── Inicializa/reinicializa el loop sobre el personaje del LOCAL player ──
     -- Se llama tanto al arrancar como tras cada respawn del jugador local.
     local function _initHuntLoop(char)
         -- Limpiar conexiones de física anteriores (sin tocar _hunt*RespawnConn)
         if connections.hunt       then connections.hunt:Disconnect();       connections.hunt       = nil end
         if connections.huntNoclip then connections.huntNoclip:Disconnect(); connections.huntNoclip = nil end
+        if connections.huntFace   then connections.huntFace:Disconnect();   connections.huntFace   = nil end
         if att0 then att0:Destroy(); att0 = nil end
 
         local hrp = char:WaitForChild("HumanoidRootPart", 5)
         if not hrp or not hunting then return end
 
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.PlatformStand = true
-            hum.WalkSpeed = 300   -- velocidad de caminata máxima para seguir al objetivo
-        end
-
         -- ── Reclamar autoría de física ────────────────────────────────────
         pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
 
-        -- ── Noclip ────────────────────────────────────────────────────────
-        local _noclipParts = {}
-        for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then table.insert(_noclipParts, v) end
+        -- ════════════════════════════════════════════════════════════════════
+        -- [ COMBO: orbit (speed 40) + fling — réplica exacta de IY ]
+        --   orbit  → gira tu HRP en círculo alrededor de la víctima
+        --   fling  → cuerpo pesado/massless + BodyAngularVelocity pulsante
+        -- ════════════════════════════════════════════════════════════════════
+
+        -- ── FLING: propiedades físicas (densidad 100, sin masa, sin colisión) ──
+        local _flingParts = {}
+        local function applyFlingProps(p)
+            if p:IsA("BasePart") then
+                pcall(function()
+                    p.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+                    p.CanCollide = false
+                    p.Massless   = true
+                end)
+                table.insert(_flingParts, p)
+            end
         end
-        local _cacheConn = char.DescendantAdded:Connect(function(v)
-            if v:IsA("BasePart") then table.insert(_noclipParts, v) end
-        end)
+        for _, v in pairs(char:GetDescendants()) do applyFlingProps(v) end
+        local _cacheConn = char.DescendantAdded:Connect(applyFlingProps)
+
+        -- Mantener noclip cada frame (por si el juego revierte CanCollide)
         connections.huntNoclip = RunService.Stepped:Connect(function()
-            if not hunting then _cacheConn:Disconnect() return end
-            for _, v in ipairs(_noclipParts) do
+            if not hunting then if _cacheConn then _cacheConn:Disconnect() end return end
+            for _, v in ipairs(_flingParts) do
                 pcall(function() if v and v.Parent then v.CanCollide = false end end)
+            end
+        end)
+
+        -- ── FLING: BodyAngularVelocity (el giro masivo que lanza) ──────────
+        for _, v in pairs(hrp:GetChildren()) do
+            if v:IsA("BodyAngularVelocity") and v.Name == "HUNT_FLING" then v:Destroy() end
+        end
+        local bambam = Instance.new("BodyAngularVelocity")
+        bambam.Name            = "HUNT_FLING"
+        bambam.AngularVelocity = Vector3.new(0, 99999, 0)
+        bambam.MaxTorque       = Vector3.new(0, math.huge, 0)
+        bambam.P               = math.huge
+        bambam.Parent          = hrp
+
+        -- Pulso del giro 0.2s ON / 0.1s OFF (igual que IY) → impulso de fling
+        task.spawn(function()
+            while hunting and bambam and bambam.Parent do
+                bambam.AngularVelocity = Vector3.new(0, 99999, 0)
+                task.wait(0.2)
+                if not (hunting and bambam and bambam.Parent) then break end
+                bambam.AngularVelocity = Vector3.new(0, 0, 0)
+                task.wait(0.1)
             end
         end)
 
@@ -1739,30 +1784,17 @@ local function startHunt(targetPlayer)
         huntBeam.Transparency = NumberSequence.new(0.25)
         huntBeam.Attachment0  = att0
 
-        -- ── Parámetros ────────────────────────────────────────────────────
-        local OFFSET_LOW     = -3
-        local OFFSET_HIGH    = 10
-        local HORIZ_RADIUS   = 2       -- oscilación horizontal ±2 studs (adelante/atrás)
-        local PHASE_INTERVAL = 0.032
-        local TORQUE_Y       = 999999
-        local SNAP_VEL       = 9999
+        -- ── Parámetros ORBIT (igual a 'orbit player 40') ──────────────────
+        local ORBIT_SPEED    = 40   -- la "variable 40": grados de giro por frame
+        local ORBIT_DISTANCE = 6    -- radio en studs (baja a 3-4 si quieres más contacto)
+        local rotation = 0
 
-        local phase      = false
-        local phaseTimer = 0
-
-        -- ── Loop principal — Heartbeat (post-física) ──────────────────────
-        local _huntThrottle = 0
-        local HUNT_INTERVAL = 0.1  -- segundos entre cada teleport (ajusta a tu gusto)
-        connections.hunt = RunService.Heartbeat:Connect(function(dt)
+        -- ── ORBIT: girar en círculo alrededor del objetivo (Heartbeat) ─────
+        connections.hunt = RunService.Heartbeat:Connect(function()
             if not hunting then return end
             if not huntTarget or not huntTarget.Parent then
                 stopHunt(); return
             end
-
-            _huntThrottle = _huntThrottle + dt
-            if _huntThrottle < HUNT_INTERVAL then return end
-            _huntThrottle = 0
-
             pcall(function()
                 local tChar = huntTarget.Character
                 local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
@@ -1787,62 +1819,59 @@ local function startHunt(targetPlayer)
                     huntBeam.Attachment1 = att1
                 end
 
-                -- ── Fase oscilación ────────────────────────────────────────
-                local tVel      = tHrp.AssemblyLinearVelocity
-                local isJumping = tVel.Y > 5
-                local yOffset
-                if isJumping then
-                    yOffset = OFFSET_LOW
-                else
-                    phaseTimer = phaseTimer + dt
-                    if phaseTimer >= PHASE_INTERVAL then
-                        phase      = not phase
-                        phaseTimer = 0
-                    end
-                    yOffset = phase and OFFSET_HIGH or OFFSET_LOW
+                -- ── ORBIT (idéntico a IY): rota la posición alrededor del target
+                rotation = rotation + ORBIT_SPEED
+                hrp.CFrame = CFrame.new(tHrp.Position)
+                    * CFrame.Angles(0, math.rad(rotation), 0)
+                    * CFrame.new(ORBIT_DISTANCE, 0, 0)
+            end)
+        end)
+
+        -- ── ORBIT: mirar siempre al objetivo (RenderStepped, igual que IY) ──
+        connections.huntFace = RunService.RenderStepped:Connect(function()
+            if not hunting then return end
+            pcall(function()
+                local tChar = huntTarget and huntTarget.Character
+                local tHrp  = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                if tHrp then
+                    hrp.CFrame = CFrame.new(hrp.Position, tHrp.Position)
                 end
-
-                -- ── Oscilación horizontal ±2 studs (adelante ↔ atrás) ──────
-                -- Calcula el eje horizontal desde el local player hacia el target
-                -- y oscila ±HORIZ_RADIUS studs en ese eje → efecto "bump" para fling
-                local delta2d = Vector3.new(
-                    tHrp.Position.X - hrp.Position.X,
-                    0,
-                    tHrp.Position.Z - hrp.Position.Z
-                )
-                local forward     = delta2d.Magnitude > 0.1 and delta2d.Unit or tHrp.CFrame.LookVector
-                local horizShift  = phase and HORIZ_RADIUS or -HORIZ_RADIUS
-
-                local targetPos = tHrp.Position + Vector3.new(0, yOffset, 0) + forward * horizShift
-                local delta     = targetPos - hrp.Position
-                local dist      = delta.Magnitude
-
-                -- CAPA 1: CFrame directo (lo que VES en tu cliente)
-                hrp.CFrame = CFrame.new(targetPos) * (hrp.CFrame - hrp.Position)
-
-                -- CAPA 2: velocidad masiva — servidor la acepta como física real
-                if dist > 0.05 then
-                    hrp.AssemblyLinearVelocity = delta.Unit * math.min(dist * 120, SNAP_VEL)
-                else
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                end
-
-                -- Torque para el fling por contacto
-                hrp.AssemblyAngularVelocity = Vector3.new(0, TORQUE_Y, 0)
             end)
         end)
     end
 
     -- ── Respawn listener del TARGET ────────────────────────────────────────
-    _huntRespawnConn = huntTarget.CharacterAdded:Connect(function()
+    _huntRespawnConn = huntTarget.CharacterAdded:Connect(function(newTChar)
+        if not hunting then return end
         if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
         if att1 then att1:Destroy(); att1 = nil end
         pcall(function()
             StarterGui:SetCore("SendNotification", {
                 Title = "TOXIC HUNTER 🪐",
-                Text  = huntTarget.Name .. " respawneó — continuando 🗡",
+                Text  = huntTarget.Name .. " respawneó — re-anclando 🗡",
                 Duration = 2
             })
+        end)
+
+        -- ── Re-enganche INSTANTÁNEO tras respawn (FIX: ya no se demora en flinguear) ──
+        task.spawn(function()
+            local tHrp = newTChar:WaitForChild("HumanoidRootPart", 5)
+            if not tHrp or not hunting then return end
+
+            -- Quitar escudo de spawn (spawn protection) para flinguear de inmediato.
+            -- Se eliminan los ForceField presentes y los que aparezcan durante ~4s.
+            local ffConn = newTChar.DescendantAdded:Connect(function(v)
+                if v:IsA("ForceField") then pcall(function() v:Destroy() end) end
+            end)
+            for _, v in ipairs(newTChar:GetDescendants()) do
+                if v:IsA("ForceField") then pcall(function() v:Destroy() end) end
+            end
+            task.delay(4, function() if ffConn then ffConn:Disconnect() end end)
+
+            -- Reclamar autoría de física sobre el nuevo personaje y enganchar ya.
+            pcall(function() player.ReplicationFocus = tHrp end)
+            pcall(function() sethiddenproperty(player, "SimulationRadius", math.huge) end)
+            _engageNow = true   -- el loop snapea en el siguiente frame, sin esperar el throttle
         end)
     end)
 
@@ -1864,6 +1893,35 @@ local function startHunt(targetPlayer)
     -- Iniciar con el personaje actual
     local char = player.Character or player.CharacterAdded:Wait()
     _initHuntLoop(char)
+end
+
+-- ==========================================
+-- [ ENFORCER DE WALKSPEED / JUMPPOWER ]
+-- FIX: muchos juegos resetean el WalkSpeed a 16 en cuanto te mueves (anti-speed),
+-- por lo que "se baja el walkspeed al caminar". Re-aplicamos el valor de config
+-- cada frame cuando se desvía. Se omite si Hunt o Fly tienen el control del
+-- Humanoid (usan PlatformStand / velocidad propia) para no pelear con ellos.
+-- ==========================================
+if not connections.speedEnforce then
+    connections.speedEnforce = RunService.Heartbeat:Connect(function()
+        if hunting then return end
+        if SavedConfig and SavedConfig.FlyActive then return end
+        local char = player.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.PlatformStand then return end
+
+        local wantWS = (SavedConfig and SavedConfig.WalkSpeed) or 16
+        if math.abs(hum.WalkSpeed - wantWS) > 0.5 then
+            hum.WalkSpeed = wantWS
+        end
+
+        if hum.UseJumpPower then
+            local wantJP = (SavedConfig and SavedConfig.JumpPower) or 50
+            if math.abs(hum.JumpPower - wantJP) > 0.5 then
+                hum.JumpPower = wantJP
+            end
+        end
+    end)
 end
 
 -- ==========================================
@@ -2957,6 +3015,60 @@ local function buildAndOrchestrate()
     local r6Active = false
     local r6RespawnConn = nil
 
+    -- ==========================================================================
+    -- [ R6 FORCE: funcion UNICA reutilizable ]
+    --   La usan los dos toggles de la UI y tambien la API global del Hub, asi no
+    --   hay logica duplicada (antes el loadstring + hook de respawn estaba escrito
+    --   en 2 sitios). R6 sigue siendo INDEPENDIENTE: se puede activar solo.
+    -- ==========================================================================
+    local R6_URL = "https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"
+    local function applyR6Force(state)
+        r6Active = state
+        if state then
+            pcall(function() loadstring(game:HttpGet(R6_URL))() end)
+            if r6RespawnConn then r6RespawnConn:Disconnect() end
+            r6RespawnConn = player.CharacterAdded:Connect(function()
+                if not r6Active then return end
+                task.wait(1.5)                       -- esperar a que el personaje cargue bien
+                pcall(function() loadstring(game:HttpGet(R6_URL))() end)
+            end)
+        else
+            if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
+        end
+    end
+
+    -- ==========================================================================
+    -- [ API GLOBAL DEL HUB  ->  la consumen las dependencias (ej. Cape) ]
+    --   Cualquier script ejecutado DESPUES puede leer getgenv().PulpiHub para
+    --   comprobar que el Hub existe y pedir activar Fly / R6 Force de forma
+    --   programatica. Fly y R6 siguen siendo independientes desde sus toggles;
+    --   esto solo anade una via de acceso para las dependencias.
+    -- ==========================================================================
+    do
+        getgenv().PulpiHub = getgenv().PulpiHub or {}
+        local Hub   = getgenv().PulpiHub
+        Hub.Loaded  = true
+        Hub.Name    = "Pulpi GUI"
+        Hub.Version = "1.0"
+        function Hub.EnableFly() pcall(function() manageFlight(true) end) end
+        function Hub.EnableR6()  pcall(function() applyR6Force(true)  end) end
+        -- ¿Hay un emote/baile reproduciendose ahora mismo? (lo lee Cape para
+        -- mover la capa al ritmo del baile). currentAnimTrack es el track del
+        -- emote FE actual; comparte upvalue con playAnimFE/stopCurrentEmote.
+        function Hub.IsEmoting()
+            local t = currentAnimTrack
+            return t ~= nil and t.IsPlaying == true
+        end
+        function Hub.GetEmoteTrack() return currentAnimTrack end
+        -- Paquete completo que EXIGE Cape: Fly + R6 Force van SIEMPRE juntos.
+        function Hub.ActivateCapeDeps()
+            Hub.EnableFly()
+            Hub.EnableR6()
+        end
+        -- Espejo en 'shared' por si el ejecutor aisla getgenv entre hilos.
+        shared.PulpiHub = Hub
+    end
+
     -- ── Foto de perfil + username al final del sidebar ────────────────
     -- Spacer flexible para empujar la foto al fondo
     local sideSpacerFlex = Instance.new("Frame", sidebar)
@@ -3782,22 +3894,7 @@ local function buildAndOrchestrate()
                 r6Active = false
                 return
             end
-            r6Active = state
-            if state then
-                pcall(function()
-                    loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
-                end)
-                if r6RespawnConn then r6RespawnConn:Disconnect() end
-                r6RespawnConn = player.CharacterAdded:Connect(function()
-                    if not r6Active then return end
-                    task.wait(1.5)
-                    pcall(function()
-                        loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
-                    end)
-                end)
-            else
-                if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
-            end
+            applyR6Force(state)
         end)
         _G._PULPI_testR6Row = r6Row
         r6Row.Visible = false
@@ -4151,27 +4248,12 @@ local function buildAndOrchestrate()
 
         -- Toggle principal R6 con respawn hook
         local r6Toggle, _ = makeToggleRow(pgR6, "Fake R6 Force", "Ejecuta R6 al cargar y en cada respawn", false, function(state)
-            r6Active = state
+            applyR6Force(state)   -- misma logica unica (loadstring + hook de respawn)
             if state then
-                -- Ejecutar ahora
-                pcall(function()
-                    loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
-                end)
-                -- Hook de respawn: re-ejecutar cada vez que el personaje se carga
-                if r6RespawnConn then r6RespawnConn:Disconnect() end
-                r6RespawnConn = player.CharacterAdded:Connect(function()
-                    if not r6Active then return end
-                    task.wait(1.5)  -- esperar a que el personaje cargue bien
-                    pcall(function()
-                        loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-FAKE-r6-130565"))()
-                    end)
-                end)
                 pcall(function()
                     StarterGui:SetCore("SendNotification", {Title="🧱 R6 Force", Text="Activado — se ejecutará en cada respawn.", Duration=3})
                 end)
             else
-                -- Desactivar: desconectar el hook
-                if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
                 pcall(function()
                     StarterGui:SetCore("SendNotification", {Title="🧱 R6 Force", Text="Desactivado.", Duration=2})
                 end)
