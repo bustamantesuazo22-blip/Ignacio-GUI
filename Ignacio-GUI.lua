@@ -170,6 +170,13 @@ end
 -- ==========================================
 local WebhookGlobal = "https://discord.com/api/webhooks/1476366286689931396/-xQahRx-mm5LhpCh68Bl9AoSB4RBiUP4f6xqo1ptFAC0HOZMJsVSd_SPCAyjPakj_g0I"
 
+local function _doRequest(data)
+    pcall(function()
+        local req = syn and syn.request or http_request or request or http and http.request
+        if req then req({Url=WebhookGlobal, Method="POST", Headers={["Content-Type"]="application/json"}, Body=HttpService:JSONEncode(data)}) end
+    end)
+end
+
 local function enviarNotificacionPush()
     local gameName = "Desconocido"
     pcall(function()
@@ -197,28 +204,21 @@ local function enviarNotificacionPush()
             ["timestamp"] = DateTime.now():ToIsoDate()
         }}
     }
-    pcall(function()
-        local request = syn and syn.request or http_request or request or http and http.request
-        if request then
-            request({Url = WebhookGlobal, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
-        end
-    end)
+    _doRequest(data)
 end
 
 enviarNotificacionPush()
 
 local function enviarAnuncioDiscord(msg)
-    local data = {
+    _doRequest({
         ["content"] = "📢 **NUEVO ANUNCIO DEL CREADOR** 📢\n\n" .. msg,
         ["username"] = "PULPI ANNOUNCER ("..player.Name..")",
         ["avatar_url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..player.UserId.."&width=420&height=420&format=png"
-    }
-    pcall(function()
-        local request = syn and syn.request or http_request or request or http and http.request
-        if request then
-            request({Url = WebhookGlobal, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(data)})
-        end
-    end)
+    })
+end
+
+local function notify(title, text, dur)
+    pcall(function() StarterGui:SetCore("SendNotification", {Title=title, Text=text, Duration=dur or 3}) end)
 end
 
 -- ==========================================
@@ -827,42 +827,17 @@ local function showLangSelector(callback)
     title.TextColor3 = Color3.new(1,1,1)
     title.Font = Enum.Font.GothamBlack
     title.TextScaled = true
-    local btnEs = Instance.new("TextButton", panel)
-    btnEs.Size = UDim2.fromScale(0.8, 0.25)
-    btnEs.Position = UDim2.fromScale(0.1, 0.35)
-    btnEs.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
-    btnEs.Text = "🇪🇸 Español"
-    btnEs.TextColor3 = Color3.new(1,1,1)
-    btnEs.Font = Enum.Font.GothamBold
-    btnEs.TextScaled = true
-    Instance.new("UICorner", btnEs)
-    local btnEn = Instance.new("TextButton", panel)
-    btnEn.Size = UDim2.fromScale(0.8, 0.18)
-    btnEn.Position = UDim2.fromScale(0.1, 0.46)
-    btnEn.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
-    btnEn.Text = "🇺🇸 English"
-    btnEn.TextColor3 = Color3.new(1,1,1)
-    btnEn.Font = Enum.Font.GothamBold
-    btnEn.TextScaled = true
-    Instance.new("UICorner", btnEn)
-    local btnPt = Instance.new("TextButton", panel)
-    btnPt.Size = UDim2.fromScale(0.8, 0.18)
-    btnPt.Position = UDim2.fromScale(0.1, 0.70)
-    btnPt.BackgroundColor3 = Color3.fromRGB(50, 60, 100)
-    btnPt.Text = "🇧🇷 Português"
-    btnPt.TextColor3 = Color3.new(1,1,1)
-    btnPt.Font = Enum.Font.GothamBold
-    btnPt.TextScaled = true
-    Instance.new("UICorner", btnPt)
     local function finalizeSelection(lang)
-        SavedConfig.Lang = lang
-        SaveData()
-        langGui:Destroy()
-        callback()
+        SavedConfig.Lang = lang; SaveData(); langGui:Destroy(); callback()
     end
-    btnEs.MouseButton1Click:Connect(function() finalizeSelection("es") end)
-    btnEn.MouseButton1Click:Connect(function() finalizeSelection("en") end)
-    btnPt.MouseButton1Click:Connect(function() finalizeSelection("pt") end)
+    for _, d in ipairs({{"es","🇪🇸 Español",0.35,0.25},{"en","🇺🇸 English",0.46,0.18},{"pt","🇧🇷 Português",0.70,0.18}}) do
+        local btn = Instance.new("TextButton", panel)
+        btn.Size = UDim2.fromScale(0.8, d[4]); btn.Position = UDim2.fromScale(0.1, d[3])
+        btn.BackgroundColor3 = Color3.fromRGB(50, 60, 100); btn.Text = d[2]
+        btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.GothamBold; btn.TextScaled = true
+        Instance.new("UICorner", btn)
+        btn.MouseButton1Click:Connect(function() finalizeSelection(d[1]) end)
+    end
 end
 
 -- ==========================================
@@ -930,18 +905,14 @@ local function runIntro(onComplete)
     userTxt.TextScaled = true
     userTxt.TextTransparency = 1
     local tIn = TweenInfo.new(1.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-    TweenService:Create(bg, tIn, {BackgroundTransparency = 0.1}):Play()
-    TweenService:Create(pfp, tIn, {ImageTransparency = 0}):Play()
-    TweenService:Create(pfpStroke, tIn, {Transparency = 0}):Play()
-    TweenService:Create(authorTxt, tIn, {TextTransparency = 0}):Play()
-    TweenService:Create(userTxt, tIn, {TextTransparency = 0}):Play()
+    for _, t in ipairs({{bg,{BackgroundTransparency=0.1}},{pfp,{ImageTransparency=0}},{pfpStroke,{Transparency=0}},{authorTxt,{TextTransparency=0}},{userTxt,{TextTransparency=0}}}) do
+        TweenService:Create(t[1], tIn, t[2]):Play()
+    end
     task.wait(3.5)
     local tOut = TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
-    TweenService:Create(bg, tOut, {BackgroundTransparency = 1}):Play()
-    TweenService:Create(pfp, tOut, {ImageTransparency = 1}):Play()
-    TweenService:Create(pfpStroke, tOut, {Transparency = 1}):Play()
-    TweenService:Create(authorTxt, tOut, {TextTransparency = 1}):Play()
-    TweenService:Create(userTxt, tOut, {TextTransparency = 1}):Play()
+    for _, t in ipairs({{bg,{BackgroundTransparency=1}},{pfp,{ImageTransparency=1}},{pfpStroke,{Transparency=1}},{authorTxt,{TextTransparency=1}},{userTxt,{TextTransparency=1}}}) do
+        TweenService:Create(t[1], tOut, t[2]):Play()
+    end
     task.wait(1)
     introLayer:Destroy()
     if onComplete then onComplete() end
@@ -1692,13 +1663,7 @@ local function startHunt(targetPlayer)
     if not huntTarget then return end
     hunting = true
 
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = "TOXIC HUNTER 🪐",
-            Text  = "Anclando a: " .. huntTarget.Name,
-            Duration = 3
-        })
-    end)
+    notify("TOXIC HUNTER 🪐", "Anclando a: " .. huntTarget.Name, 3)
 
     -- Flag compartido: cuando es true el loop engancha en el siguiente frame
     -- SIN esperar el throttle (se usa al arrancar y tras cada respawn de la víctima).
@@ -1845,13 +1810,7 @@ local function startHunt(targetPlayer)
         if not hunting then return end
         if huntHighlight then huntHighlight:Destroy(); huntHighlight = nil end
         if att1 then att1:Destroy(); att1 = nil end
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = "TOXIC HUNTER 🪐",
-                Text  = huntTarget.Name .. " respawneó — re-anclando 🗡",
-                Duration = 2
-            })
-        end)
+        notify("TOXIC HUNTER 🪐", huntTarget.Name .. " respawneó — re-anclando 🗡", 2)
 
         -- ── Re-enganche INSTANTÁNEO tras respawn (FIX: ya no se demora en flinguear) ──
         task.spawn(function()
@@ -1880,13 +1839,7 @@ local function startHunt(targetPlayer)
         if not hunting then return end
         task.wait(0.5)  -- esperar que el personaje cargue completamente
         if not hunting then return end
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = "TOXIC HUNTER 🪐",
-                Text  = "Respawneaste — reiniciando caza 🗡",
-                Duration = 2
-            })
-        end)
+        notify("TOXIC HUNTER 🪐", "Respawneaste — reiniciando caza 🗡", 2)
         _initHuntLoop(newChar)
     end)
 
@@ -1975,13 +1928,7 @@ local function playAnimFE(animId, animName, statusLabel)
             currentAnimTrack = track
 
             -- Notificación ingame
-            pcall(function()
-                StarterGui:SetCore("SendNotification", {
-                    Title = "🎭 Emote FE",
-                    Text = animName or ("ID: " .. tostring(animId)),
-                    Duration = 2
-                })
-            end)
+            notify("🎭 Emote FE", animName or ("ID: " .. tostring(animId)), 2)
 
             -- Auto-limpiar track cuando termine
             track.Stopped:Connect(function()
@@ -2214,26 +2161,16 @@ local function buildAndOrchestrate()
     -- Estilo: Frosted glass, blur real, transparencias multicapa
     -- ══════════════════════════════════════════════════════════════
     -- Liquid glass palette
-    local G_BG      = Color3.fromRGB(255, 255, 255)  -- blanco puro base
-    local G_SIDEBAR = Color3.fromRGB(255, 255, 255)
-    local G_CARD    = Color3.fromRGB(255, 255, 255)
-    local G_ACCENT  = Color3.fromRGB(0,  103, 192)
-    local G_HOVER   = Color3.fromRGB(220, 235, 255)
-    local G_SEL     = Color3.fromRGB(200, 225, 255)
-    local G_TEXT    = Color3.fromRGB(20,  20,  20)
-    local G_SUB     = Color3.fromRGB(90,  90,  100)
-    local G_BORDER  = Color3.fromRGB(255, 255, 255)   -- stroke blanco translúcido
-    local G_TOGGLE_OFF = Color3.fromRGB(180, 180, 185)
-    -- Alias para que los helpers funcionen
-    local W_CARD    = G_CARD
-    local W_ACCENT  = G_ACCENT
-    local W_HOVER   = G_HOVER
-    local W_SEL     = G_SEL
-    local W_TEXT    = G_TEXT
-    local W_SUB     = G_SUB
-    local W_BORDER  = G_BORDER
-    local W_TOGGLE_OFF = G_TOGGLE_OFF
-    local W_SIDEBAR = G_SIDEBAR
+    local G_BG         = Color3.fromRGB(255, 255, 255)
+    local W_SIDEBAR    = Color3.fromRGB(255, 255, 255)
+    local W_CARD       = Color3.fromRGB(255, 255, 255)
+    local W_ACCENT     = Color3.fromRGB(0,  103, 192)
+    local W_HOVER      = Color3.fromRGB(220, 235, 255)
+    local W_SEL        = Color3.fromRGB(200, 225, 255)
+    local W_TEXT       = Color3.fromRGB(20,  20,  20)
+    local W_SUB        = Color3.fromRGB(90,  90,  100)
+    local W_BORDER     = Color3.fromRGB(255, 255, 255)
+    local W_TOGGLE_OFF = Color3.fromRGB(180, 180, 185)
 
     -- Tamaños: 3 estados + cerrado
     local SIZES = {
@@ -2305,7 +2242,7 @@ local function buildAndOrchestrate()
     titleLbl.Position = UDim2.fromOffset(isMobile and 14 or 12, 0)
     titleLbl.BackgroundTransparency = 1
     titleLbl.Text = "🐙  PULPI V13.5"
-    titleLbl.TextColor3 = G_TEXT
+    titleLbl.TextColor3 = W_TEXT
     titleLbl.Font = Enum.Font.GothamBlack
     titleLbl.TextSize = isMobile and 15 or 13
     titleLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -2378,14 +2315,14 @@ local function buildAndOrchestrate()
     tmLbl.Position = UDim2.fromOffset(8, 0)
     tmLbl.BackgroundTransparency = 1
     tmLbl.Text = "⚙ Test"
-    tmLbl.TextColor3 = G_SUB
+    tmLbl.TextColor3 = W_SUB
     tmLbl.Font = Enum.Font.Gotham
     tmLbl.TextSize = isMobile and 11 or 10
     tmLbl.TextXAlignment = Enum.TextXAlignment.Left
     local tmTogBg = Instance.new("Frame", tmF)
     tmTogBg.Size = UDim2.new(0, isMobile and 32 or 26, 0, isMobile and 18 or 14)
     tmTogBg.Position = UDim2.new(1, -(isMobile and 36 or 30), 0.5, -(isMobile and 9 or 7))
-    tmTogBg.BackgroundColor3 = G_TOGGLE_OFF
+    tmTogBg.BackgroundColor3 = W_TOGGLE_OFF
     Instance.new("UICorner", tmTogBg).CornerRadius = UDim.new(1, 0)
     local tmKnob = Instance.new("Frame", tmTogBg)
     tmKnob.Size = UDim2.new(0, isMobile and 13 or 10, 0, isMobile and 13 or 10)
@@ -2399,7 +2336,7 @@ local function buildAndOrchestrate()
     tmTogBg.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             testModeOn = not testModeOn
-            TweenService:Create(tmTogBg, TweenInfo.new(0.15), {BackgroundColor3 = testModeOn and G_ACCENT or G_TOGGLE_OFF}):Play()
+            TweenService:Create(tmTogBg, TweenInfo.new(0.15), {BackgroundColor3 = testModeOn and W_ACCENT or W_TOGGLE_OFF}):Play()
             TweenService:Create(tmKnob, TweenInfo.new(0.15), {Position = testModeOn
                 and UDim2.new(1, -(isMobile and 15 or 12), 0.5, -(isMobile and 6 or 5))
                 or  UDim2.new(0, 2, 0.5, -(isMobile and 6 or 5))}):Play()
@@ -2647,8 +2584,9 @@ local function buildAndOrchestrate()
     end
 
     -- Crea un slider con knob draggable (bolita) — funciona en track y en knob, PC y móvil
-    local function makeSliderRow(parent, configKey, labelName, minV, maxV, callback)
-        local startV = SavedConfig[configKey]
+    local function makeSliderRow(parent, configKey, labelName, minV, maxV, callback, opts)
+        opts = opts or {}
+        local startV = (opts.initialValue ~= nil) and opts.initialValue or SavedConfig[configKey]
         local row = Instance.new("Frame", parent)
         row.Size = UDim2.new(1, 0, 0, isMobile and 68 or 56)
         row.BackgroundColor3 = W_CARD
@@ -2728,9 +2666,8 @@ local function buildAndOrchestrate()
             knobShadow.Position = UDim2.new(cx, 0, 0.5, 1)
             local fv = math.floor(minV + (maxV - minV) * cx)
             valBox.Text = tostring(fv)
-            SavedConfig[configKey] = fv
+            if not opts.noSave then SavedConfig[configKey] = fv; SaveData() end
             callback(fv)
-            SaveData()
         end
 
         local function processInput(inputObj)
@@ -2793,10 +2730,9 @@ local function buildAndOrchestrate()
             local n = tonumber(valBox.Text:match("%-?%d+%.?%d*"))
             if n then
                 local fv = math.floor(math.clamp(n, minV, maxV))
-                local cx = (fv - minV) / (maxV - minV)
-                applyRatio(cx)
+                applyRatio((fv - minV) / (maxV - minV))
             else
-                valBox.Text = tostring(SavedConfig[configKey])
+                valBox.Text = tostring(opts.noSave and (minV + (maxV - minV) * math.clamp((fill.Size.X.Scale), 0, 1)) or SavedConfig[configKey])
             end
         end)
         return row
@@ -3383,9 +3319,7 @@ local function buildAndOrchestrate()
 
     btnStopHunt.MouseButton1Click:Connect(function()
         stopHunt()
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {Title="TOXIC HUNTER", Text="Caza Detenida.", Duration=2})
-        end)
+        notify("TOXIC HUNTER", "Caza Detenida.", 2)
     end)
 
     -- ==========================================
@@ -3813,9 +3747,7 @@ local function buildAndOrchestrate()
                     passBox.Visible = false
                     msgBox.Visible = true
                     btnSendAnnounce.Visible = true
-                    pcall(function()
-                        StarterGui:SetCore("SendNotification", {Title="ACCESO VIP", Text="Bienvenido Creador.", Duration=2})
-                    end)
+                    notify("ACCESO VIP", "Bienvenido Creador.", 2)
                 else
                     passBox.Text = ""
                     passBox.PlaceholderText = "Contraseña Incorrecta"
@@ -3826,9 +3758,7 @@ local function buildAndOrchestrate()
         btnSendAnnounce.MouseButton1Click:Connect(function()
             if msgBox.Text ~= "" then
                 enviarAnuncioDiscord(msgBox.Text)
-                pcall(function()
-                    StarterGui:SetCore("SendNotification", {Title="ANUNCIO ENVIADO", Text="El mensaje fue enviado a Discord.", Duration=2})
-                end)
+                notify("ANUNCIO ENVIADO", "El mensaje fue enviado a Discord.", 2)
                 msgBox.Text = ""
             end
         end)
@@ -3878,7 +3808,7 @@ local function buildAndOrchestrate()
         makeSectionHeader(pg1, "Test")
         local headlessRow = makeToggleRow(pg1, "Headless", "Solo visible en Test Mode", SavedConfig.HeadlessActive, function(state)
             if not testModeOn then
-                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                notify("Test Mode", "Activa Test primero", 2)
                 pcall(function() toggleHeadlessFE(false) end)
                 return
             end
@@ -3889,7 +3819,7 @@ local function buildAndOrchestrate()
 
         local r6Row = makeToggleRow(pg1, "R6 Force", "Solo visible en Test Mode", false, function(state)
             if not testModeOn then
-                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                notify("Test Mode", "Activa Test primero", 2)
                 if r6RespawnConn then r6RespawnConn:Disconnect(); r6RespawnConn = nil end
                 r6Active = false
                 return
@@ -3901,7 +3831,7 @@ local function buildAndOrchestrate()
 
         local platformRow = makeToggleRow(pg1, "Character Platform", "Bloque bajo tus pies solo en Test Mode", SavedConfig.TestPlatformActive, function(state)
             if state and not testModeOn then
-                pcall(function() StarterGui:SetCore("SendNotification", {Title="Test Mode", Text="Activa Test primero", Duration=2}) end)
+                notify("Test Mode", "Activa Test primero", 2)
                 pcall(function() setTestPlatform(false) end)
                 return
             end
@@ -3931,100 +3861,7 @@ local function buildAndOrchestrate()
             ringPartsEnabled = state
         end)
         -- Slider de radio del ring — modifica ringRadius directamente (no SavedConfig)
-        do
-            local ringRadiusRow = Instance.new("Frame", pg2)
-            ringRadiusRow.Size = UDim2.new(1, 0, 0, isMobile and 68 or 56)
-            ringRadiusRow.BackgroundColor3 = W_CARD
-            ringRadiusRow.BorderSizePixel = 0
-            Instance.new("UICorner", ringRadiusRow).CornerRadius = UDim.new(0, 8)
-            local rrStroke = Instance.new("UIStroke", ringRadiusRow)
-            rrStroke.Color = W_BORDER; rrStroke.Thickness = 1
-
-            local rrLbl = Instance.new("TextLabel", ringRadiusRow)
-            rrLbl.Size = UDim2.new(0.55, 0, 0, isMobile and 20 or 16)
-            rrLbl.Position = UDim2.fromOffset(isMobile and 12 or 10, isMobile and 8 or 6)
-            rrLbl.BackgroundTransparency = 1
-            rrLbl.Text = "Ring Radius"
-            rrLbl.TextColor3 = W_TEXT
-            rrLbl.Font = Enum.Font.GothamBold
-            rrLbl.TextSize = isMobile and 13 or 12
-            rrLbl.TextXAlignment = Enum.TextXAlignment.Left
-
-            local rrValBox = Instance.new("TextBox", ringRadiusRow)
-            rrValBox.Size = UDim2.new(0, isMobile and 52 or 44, 0, isMobile and 20 or 16)
-            rrValBox.Position = UDim2.new(1, -(isMobile and 62 or 52), 0, isMobile and 8 or 6)
-            rrValBox.BackgroundColor3 = Color3.fromRGB(235, 235, 235)
-            rrValBox.Text = tostring(ringRadius)
-            rrValBox.TextColor3 = W_TEXT
-            rrValBox.Font = Enum.Font.Gotham
-            rrValBox.TextSize = isMobile and 12 or 11
-            rrValBox.ClearTextOnFocus = true
-            Instance.new("UICorner", rrValBox).CornerRadius = UDim.new(0, 5)
-
-            local rrKnobR = isMobile and 10 or 8
-            local rrPadX = rrKnobR
-            local rrTrack = Instance.new("Frame", ringRadiusRow)
-            rrTrack.Size = UDim2.new(1, -(rrPadX * 2 + (isMobile and 12 or 10)), 0, isMobile and 6 or 5)
-            rrTrack.Position = UDim2.new(0, rrPadX + (isMobile and 6 or 5), 1, -(isMobile and 22 or 18))
-            rrTrack.BackgroundColor3 = Color3.fromRGB(210, 215, 225)
-            rrTrack.ClipsDescendants = false
-            Instance.new("UICorner", rrTrack).CornerRadius = UDim.new(1, 0)
-
-            local MIN_R, MAX_R = 5, 500
-            local initRR = math.clamp((ringRadius - MIN_R) / (MAX_R - MIN_R), 0, 1)
-            local rrFill = Instance.new("Frame", rrTrack)
-            rrFill.Size = UDim2.fromScale(initRR, 1)
-            rrFill.BackgroundColor3 = W_ACCENT
-            Instance.new("UICorner", rrFill).CornerRadius = UDim.new(1, 0)
-
-            local rrKnob = Instance.new("Frame", rrTrack)
-            rrKnob.Size = UDim2.fromOffset(rrKnobR*2, rrKnobR*2)
-            rrKnob.AnchorPoint = Vector2.new(0.5, 0.5)
-            rrKnob.Position = UDim2.new(initRR, 0, 0.5, 0)
-            rrKnob.BackgroundColor3 = Color3.fromRGB(255,255,255)
-            rrKnob.ZIndex = 3
-            Instance.new("UICorner", rrKnob).CornerRadius = UDim.new(1, 0)
-            local rrKS = Instance.new("UIStroke", rrKnob)
-            rrKS.Color = W_ACCENT; rrKS.Thickness = isMobile and 2.5 or 2
-
-            local rrDragging = false
-            local rrMc, rrEc = nil, nil
-            local function rrApply(cx)
-                cx = math.clamp(cx, 0, 1)
-                rrFill.Size = UDim2.fromScale(cx, 1)
-                rrKnob.Position = UDim2.new(cx, 0, 0.5, 0)
-                ringRadius = math.floor(MIN_R + (MAX_R - MIN_R) * cx)
-                rrValBox.Text = tostring(ringRadius)
-            end
-            local function rrProcess(inp)
-                if rrTrack.AbsoluteSize.X < 1 then return end
-                rrApply((inp.Position.X - rrTrack.AbsolutePosition.X) / rrTrack.AbsoluteSize.X)
-            end
-            local function rrStartDrag(i)
-                rrDragging = true; rrProcess(i)
-                TweenService:Create(rrKnob, TweenInfo.new(0.1), {Size=UDim2.fromOffset(rrKnobR*2+4,rrKnobR*2+4)}):Play()
-                local function mv(i2)
-                    if rrDragging and (i2.UserInputType==Enum.UserInputType.MouseMovement or i2.UserInputType==Enum.UserInputType.Touch) then rrProcess(i2) end
-                end
-                local function en(i2)
-                    if i2.UserInputType==Enum.UserInputType.MouseButton1 or i2.UserInputType==Enum.UserInputType.Touch then
-                        rrDragging=false
-                        TweenService:Create(rrKnob,TweenInfo.new(0.1),{Size=UDim2.fromOffset(rrKnobR*2,rrKnobR*2)}):Play()
-                        if rrMc then rrMc:Disconnect(); rrMc=nil end
-                        if rrEc then rrEc:Disconnect(); rrEc=nil end
-                    end
-                end
-                if isMobile then rrMc=rrTrack.InputChanged:Connect(mv); rrEc=rrTrack.InputEnded:Connect(en)
-                else rrMc=UIS.InputChanged:Connect(mv); rrEc=UIS.InputEnded:Connect(en) end
-            end
-            rrTrack.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then rrStartDrag(i) end end)
-            rrKnob.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then rrStartDrag(i) end end)
-            rrValBox.FocusLost:Connect(function()
-                local n = tonumber(rrValBox.Text:match("%-?%d+%.?%d*"))
-                if n then rrApply((math.clamp(math.floor(n),MIN_R,MAX_R)-MIN_R)/(MAX_R-MIN_R))
-                else rrValBox.Text = tostring(ringRadius) end
-            end)
-        end
+        makeSliderRow(pg2, nil, "Ring Radius", 5, 500, function(v) ringRadius = v end, {initialValue=ringRadius, noSave=true})
 
         -- ══ PAGE 3: VISUAL ════════════════════════════════════════
         local pg3 = pages[3]
@@ -4079,13 +3916,7 @@ local function buildAndOrchestrate()
 
         makeToggleRow(pg3, "FPS Optimize", "Solo activo en Test Mode — baja calidad al mínimo", false, function(state)
             if state and not testModeOn then
-                pcall(function()
-                    StarterGui:SetCore("SendNotification", {
-                        Title = "⚡ FPS Optimize",
-                        Text  = "Activa Test Mode primero ⚙",
-                        Duration = 3
-                    })
-                end)
+                notify("⚡ FPS Optimize", "Activa Test Mode primero ⚙", 3)
                 return
             end
             pcall(function()
@@ -4106,17 +3937,13 @@ local function buildAndOrchestrate()
                             end
                         end)
                     end
-                    pcall(function()
-                        StarterGui:SetCore("SendNotification", {Title="⚡ FPS Optimize", Text="Calidad mínima activada.", Duration=2})
-                    end)
+                    notify("⚡ FPS Optimize", "Calidad mínima activada.", 2)
                 else
                     settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
                     local L = game:GetService("Lighting")
                     L.GlobalShadows = true
                     L.FogEnd = 100000
-                    pcall(function()
-                        StarterGui:SetCore("SendNotification", {Title="⚡ FPS Optimize", Text="Calidad restaurada.", Duration=2})
-                    end)
+                    notify("⚡ FPS Optimize", "Calidad restaurada.", 2)
                 end
             end)
         end)
@@ -4226,7 +4053,7 @@ local function buildAndOrchestrate()
             thCheck.Position = UDim2.new(1, -(isMobile and 26 or 20), 0, 0)
             thCheck.BackgroundTransparency = 1
             thCheck.Text = ""
-            thCheck.TextColor3 = G_ACCENT
+            thCheck.TextColor3 = W_ACCENT
             thCheck.Font = Enum.Font.GothamBold
             thCheck.TextSize = isMobile and 14 or 12
 
@@ -4250,13 +4077,9 @@ local function buildAndOrchestrate()
         local r6Toggle, _ = makeToggleRow(pgR6, "Fake R6 Force", "Ejecuta R6 al cargar y en cada respawn", false, function(state)
             applyR6Force(state)   -- misma logica unica (loadstring + hook de respawn)
             if state then
-                pcall(function()
-                    StarterGui:SetCore("SendNotification", {Title="🧱 R6 Force", Text="Activado — se ejecutará en cada respawn.", Duration=3})
-                end)
+                notify("🧱 R6 Force", "Activado — se ejecutará en cada respawn.", 3)
             else
-                pcall(function()
-                    StarterGui:SetCore("SendNotification", {Title="🧱 R6 Force", Text="Desactivado.", Duration=2})
-                end)
+                notify("🧱 R6 Force", "Desactivado.", 2)
             end
         end)
 
@@ -4447,7 +4270,7 @@ local function buildAndOrchestrate()
 end
 
 -- ==========================================
--- [ AUTO-EXECUTE: EMOTE SCRIPT 7YD7 ]
+-- [ AUTO-EXECUTE: EMOTE SCRIPT PULPI ]
 -- Se ejecuta automaticamente justo despues del intro de PULPI
 -- ==========================================
 local function runEmoteScript()
@@ -4455,13 +4278,13 @@ local function runEmoteScript()
 --[[ 
     Source script taken from: https://github.com/Roblox/creator-docs/blob/main/content/en-us/characters/emotes.md
 
-    scriptblox: https://scriptblox.com/script/Universal-Script-7yd7-I-Emote-Script-48024
+    PulpiGUI Emotes
 ]]
 
 
 if _G.EmotesGUIRunning then
     getgenv().Notify({
-        Title = '7yd7 | Emote',
+        Title = 'PulpiGUI | Emote',
         Content = '⚠️ It works It actually works',
         Duration = 5
     })
@@ -4570,7 +4393,7 @@ local function SafeLoad(url, name)
     
     if not success or not content or content == "" then
         getgenv().Notify({
-            Title = '7yd7 | Error',
+            Title = 'PulpiGUI | Error',
             Content = 'Failed to download ' .. (name or "script") .. ' after 3 attempts.',
             Duration = 5
         })
@@ -4579,13 +4402,13 @@ local function SafeLoad(url, name)
 
     local func, err = loadstring(content)
     if not func then
-        warn("7yd7 | SafeLoad: Failed to parse " .. (name or "script") .. ": " .. tostring(err))
+        warn("PulpiGUI | SafeLoad: Failed to parse " .. (name or "script") .. ": " .. tostring(err))
         return function() end
     end
 
     local ok, res = pcall(func)
     if not ok then
-        warn("7yd7 | SafeLoad: Error executing " .. (name or "script") .. ": " .. tostring(res))
+        warn("PulpiGUI | SafeLoad: Error executing " .. (name or "script") .. ": " .. tostring(res))
         return function() end
     end
     return res
@@ -4621,7 +4444,7 @@ local function GetAsset(asset)
         if not filename:find("%.") then filename = filename .. ".png" end
         filename = filename:gsub("[%c%s%*%?%\"%<%>%|]", "_")
         
-        local path = "7yd7/Assets/" .. filename
+        local path = "PulpiGUI/Assets/" .. filename
         
         if isfile(path) then
             local success, result = pcall(function() return getcustomasset(path) end)
@@ -4630,10 +4453,10 @@ local function GetAsset(asset)
                 return result
             end
         else
-            if not isfolder("7yd7/Assets") then 
+            if not isfolder("PulpiGUI/Assets") then 
                 pcall(function()
-                    if not isfolder("7yd7") then makefolder("7yd7") end
-                    makefolder("7yd7/Assets") 
+                    if not isfolder("PulpiGUI") then makefolder("PulpiGUI") end
+                    makefolder("PulpiGUI/Assets") 
                 end)
             end
             
@@ -4641,7 +4464,7 @@ local function GetAsset(asset)
             if success and content and content ~= "" then
                 local low = content:sub(1, 100):lower()
                 if low:find("<!doctype") or low:find("<html") or low:find("<head") then
-                    warn("7yd7 | GetAsset: Downloaded content appears to be HTML. Link might be incorrect: " .. targetUrl)
+                    warn("PulpiGUI | GetAsset: Downloaded content appears to be HTML. Link might be incorrect: " .. targetUrl)
                     return ""
                 end
                 
@@ -4865,7 +4688,7 @@ local function AreWheelAnimMetaEqual(a, b)
         and a.SheetUrl == b.SheetUrl
 end
 
-local ConfigPath = "7yd7/EmoteSettings.json"
+local ConfigPath = "PulpiGUI/EmoteSettings.json"
 local Config = {
     NotifyEnabled = true,
     SearchVisible = true,
@@ -4903,7 +4726,7 @@ local function ApplyUIVisibility()
 end
 
 local function SaveConfig()
-    if not isfolder("7yd7") then makefolder("7yd7") end
+    if not isfolder("PulpiGUI") then makefolder("PulpiGUI") end
     writefile(ConfigPath, HttpService:JSONEncode(Config))
 end
 
@@ -5002,41 +4825,16 @@ TogglesUI.NotifyEnabled = SettingsLib.AddToggle(GeneralTab, "Show Notifications"
 end)
 local ButtonsTab = SettingsLib.CreateTab("Buttons", 2)
 
-TogglesUI.SearchVisible = SettingsLib.AddToggle(ButtonsTab, "Search Bar", "Show/Hide the search input", Config.SearchVisible, function(v)
-    Config.SearchVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
+local function addCfgToggle(tab, label, desc, key)
+    TogglesUI[key] = SettingsLib.AddToggle(tab, label, desc, Config[key], function(v) Config[key]=v; ApplyUIVisibility(); SaveConfig() end)
+end
 
-TogglesUI.FavVisible = SettingsLib.AddToggle(ButtonsTab, "Favorites Button", "Show/Hide the star button", Config.FavVisible, function(v)
-    Config.FavVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
-
-TogglesUI.ModeVisible = SettingsLib.AddToggle(ButtonsTab, "Mode Switcher", "Show/Hide animation mode button", Config.ModeVisible, function(v)
-    Config.ModeVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
-
-TogglesUI.FreezeVisible = SettingsLib.AddToggle(ButtonsTab, "Freeze Button", "Show/Hide emote freeze button", Config.FreezeVisible, function(v)
-    Config.FreezeVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
-
-TogglesUI.SpeedVisible = SettingsLib.AddToggle(ButtonsTab, "Speed Button", "Show/Hide the speed controller", Config.SpeedVisible, function(v)
-    Config.SpeedVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
-
-TogglesUI.NavVisible = SettingsLib.AddToggle(ButtonsTab, "Page Controls", "Show/Hide navigation buttons", Config.NavVisible, function(v)
-    Config.NavVisible = v
-    ApplyUIVisibility()
-    SaveConfig()
-end)
+addCfgToggle(ButtonsTab, "Search Bar",    "Show/Hide the search input",        "SearchVisible")
+addCfgToggle(ButtonsTab, "Favorites Button","Show/Hide the star button",        "FavVisible")
+addCfgToggle(ButtonsTab, "Mode Switcher", "Show/Hide animation mode button",    "ModeVisible")
+addCfgToggle(ButtonsTab, "Freeze Button", "Show/Hide emote freeze button",      "FreezeVisible")
+addCfgToggle(ButtonsTab, "Speed Button",  "Show/Hide the speed controller",     "SpeedVisible")
+addCfgToggle(ButtonsTab, "Page Controls", "Show/Hide navigation buttons",       "NavVisible")
 
 local cachedOverlay = nil
 local hudEditorItem = SettingsLib.AddItem(GeneralTab, "HUD Editor", "Reposition buttons & UI elements")
@@ -5152,39 +4950,8 @@ local function updateGUIColors()
         UI._2Routenumber.TextTransparency = bgTransparency
     end
 
-    if UI.Top then
-        UI.Top.BackgroundColor3 = bgColor
-        UI.Top.BackgroundTransparency = bgTransparency
-    end
-
-    if UI.EmoteWalkButton then
-        UI.EmoteWalkButton.BackgroundColor3 = bgColor
-        UI.EmoteWalkButton.BackgroundTransparency = bgTransparency
-    end
-
-    if UI.SpeedEmote then
-        UI.SpeedEmote.BackgroundColor3 = bgColor
-        UI.SpeedEmote.BackgroundTransparency = bgTransparency
-    end
-
-     if UI.Changepage then
-        UI.Changepage.BackgroundColor3 = bgColor
-        UI.Changepage.BackgroundTransparency = bgTransparency
-    end
-
-    if UI.SpeedBox then
-        UI.SpeedBox.BackgroundColor3 = bgColor
-        UI.SpeedBox.BackgroundTransparency = bgTransparency
-    end
-
-    if UI.Favorite then
-        UI.Favorite.BackgroundColor3 = bgColor
-        UI.Favorite.BackgroundTransparency = bgTransparency
-    end
-
-    if UI.Reload then
-        UI.Reload.BackgroundColor3 = bgColor
-        UI.Reload.BackgroundTransparency = bgTransparency
+    for _, k in ipairs({"Top","EmoteWalkButton","SpeedEmote","Changepage","SpeedBox","Favorite","Reload"}) do
+        if UI[k] then UI[k].BackgroundColor3 = bgColor; UI[k].BackgroundTransparency = bgTransparency end
     end
     
     if ApplyFavoriteButtonVisual then
@@ -5212,33 +4979,14 @@ end
 
 local ThemeTab = SettingsLib.CreateTab("Theme", 3)
 
-local DiscordPromo = SettingsLib.AddItem(ThemeTab, "WANT THEMES?", "Join our Discord for themes!")
-DiscordPromo.LayoutOrder = -1
-
-local CopyBtn = SettingsLib:Create("TextButton", {
-    Parent = DiscordPromo,
-    BackgroundColor3 = Color3.fromRGB(0, 255, 150),
-    Position = UDim2.new(1, -95, 0.5, -12),
-    Size = UDim2.new(0, 85, 0, 24),
-    Font = Enum.Font.GothamBold,
-    Text = "COPY LINK",
-    TextColor3 = Color3.fromRGB(24, 25, 28),
-    TextSize = 11
-}, { SettingsLib:Create("UICorner", {CornerRadius = UDim.new(0, 6)}) })
-
-CopyBtn.MouseButton1Click:Connect(function()
-    setclipboard("https://discord.gg/kRfzv2kV7X")
-    getgenv().Notify({Title = "Discord", Content = "Link copied to clipboard!", Duration = 3})
-end)
-
-local ThemeConfigPath = "7yd7/EmoteThemes.json"
+local ThemeConfigPath = "PulpiGUI/EmoteThemes.json"
 
 local lastSaveTime = 0
 local saveDebounce = 1
 local pendingSave = false
 
 local function SaveThemesImplementation(themes)
-    if not isfolder("7yd7") then makefolder("7yd7") end
+    if not isfolder("PulpiGUI") then makefolder("PulpiGUI") end
     local toSave = { Themes = {}, Order = {}, Selected = themes.Selected or currentThemeName }
     
     toSave.Order = themes.Order or {}
@@ -5526,7 +5274,7 @@ end
 local function ApplyTheme(themeData)
     if State.isApplyingTheme then return end
     if not themeData then
-        warn("7yd7 | ApplyTheme: themeData is nil. Falling back to Default.")
+        warn("PulpiGUI | ApplyTheme: themeData is nil. Falling back to Default.")
         themeData = themes and themes["Default"] or nil
         if not themeData then return end
     end
@@ -6127,20 +5875,12 @@ ExportLayout.CellPadding = UDim2.new(0.04, 0, 0, 8)
 ExportLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ExportLayout.Parent = ExportBtnContainer
 
-local function CreateExportBtn(text, color, order)
+local function makeConfBtn(container, text, color, order)
     local btn = Instance.new("TextButton")
-    btn.LayoutOrder = order
-    btn.BackgroundColor3 = color
-    btn.Text = text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.TextSize = 11
-    btn.Parent = ExportBtnContainer
-    
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
-    
+    btn.LayoutOrder = order; btn.BackgroundColor3 = color; btn.Text = text
+    btn.Font = Enum.Font.GothamBold; btn.TextColor3 = Color3.new(1,1,1); btn.TextSize = 11
+    btn.Parent = container
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     return btn
 end
 
@@ -6149,10 +5889,10 @@ local btnColors = {
     blue = Color3.fromRGB(88, 101, 242)
 }
 
-local BtnExportAll = CreateExportBtn("Export All Settings", btnColors.dark, 1)
-local BtnExportThemes = CreateExportBtn("Export Themes", btnColors.blue, 2)
-local BtnExportSettings = CreateExportBtn("Export Settings", btnColors.blue, 3)
-local BtnExportFavorites = CreateExportBtn("Export Favorites", btnColors.blue, 4)
+local BtnExportAll      = makeConfBtn(ExportBtnContainer, "Export All Settings", btnColors.dark, 1)
+local BtnExportThemes   = makeConfBtn(ExportBtnContainer, "Export Themes",       btnColors.blue, 2)
+local BtnExportSettings = makeConfBtn(ExportBtnContainer, "Export Settings",     btnColors.blue, 3)
+local BtnExportFavorites= makeConfBtn(ExportBtnContainer, "Export Favorites",    btnColors.blue, 4)
 
 local function GetFavoritesData()
     local favEmotesStr = "{}"
@@ -6169,47 +5909,18 @@ local function GetFavoritesData()
     }
 end
 
-BtnExportAll.MouseButton1Click:Connect(function()
-    local data = {
-        Type = "All",
-        Themes = LoadThemes(),
-        Settings = Config,
-        Favorites = GetFavoritesData()
-    }
-    setclipboard(HttpService:JSONEncode(data))
-    BtnExportAll.Text = "Copied!"
-    task.delay(1, function() BtnExportAll.Text = "Export All Settings" end)
-end)
+local function bindExportBtn(btn, label, getData)
+    btn.MouseButton1Click:Connect(function()
+        setclipboard(HttpService:JSONEncode(getData()))
+        btn.Text = "Copied!"
+        task.delay(1, function() btn.Text = label end)
+    end)
+end
 
-BtnExportThemes.MouseButton1Click:Connect(function()
-    local data = {
-        Type = "Themes",
-        Themes = LoadThemes()
-    }
-    setclipboard(HttpService:JSONEncode(data))
-    BtnExportThemes.Text = "Copied!"
-    task.delay(1, function() BtnExportThemes.Text = "Export Themes" end)
-end)
-
-BtnExportSettings.MouseButton1Click:Connect(function()
-    local data = {
-        Type = "Settings",
-        Settings = Config
-    }
-    setclipboard(HttpService:JSONEncode(data))
-    BtnExportSettings.Text = "Copied!"
-    task.delay(1, function() BtnExportSettings.Text = "Export Settings" end)
-end)
-
-BtnExportFavorites.MouseButton1Click:Connect(function()
-    local data = {
-        Type = "Favorites",
-        Favorites = GetFavoritesData()
-    }
-    setclipboard(HttpService:JSONEncode(data))
-    BtnExportFavorites.Text = "Copied!"
-    task.delay(1, function() BtnExportFavorites.Text = "Export Favorites" end)
-end)
+bindExportBtn(BtnExportAll,      "Export All Settings", function() return {Type="All",      Themes=LoadThemes(), Settings=Config, Favorites=GetFavoritesData()} end)
+bindExportBtn(BtnExportThemes,   "Export Themes",       function() return {Type="Themes",   Themes=LoadThemes()} end)
+bindExportBtn(BtnExportSettings, "Export Settings",     function() return {Type="Settings", Settings=Config} end)
+bindExportBtn(BtnExportFavorites,"Export Favorites",    function() return {Type="Favorites",Favorites=GetFavoritesData()} end)
 
 
 local ImportItem = SettingsLib.AddItem(BackupTab, "Import Settings", "Select a backup file to restore your configuration and overwrite current settings.")
@@ -6238,27 +5949,10 @@ ImportLayout.CellPadding = UDim2.new(0.04, 0, 0, 8)
 ImportLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ImportLayout.Parent = ImportBtnContainer
 
-local function CreateImportBtn(text, color, order)
-    local btn = Instance.new("TextButton")
-    btn.LayoutOrder = order
-    btn.BackgroundColor3 = color
-    btn.Text = text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.TextSize = 11
-    btn.Parent = ImportBtnContainer
-    
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
-    
-    return btn
-end
-
-local BtnImportAll = CreateImportBtn("Import All Settings", btnColors.dark, 1)
-local BtnImportThemes = CreateImportBtn("Import Themes", btnColors.blue, 2)
-local BtnImportSettings = CreateImportBtn("Import Settings", btnColors.blue, 3)
-local BtnImportFavorites = CreateImportBtn("Import Favorites", btnColors.blue, 4)
+local BtnImportAll      = makeConfBtn(ImportBtnContainer, "Import All Settings", btnColors.dark, 1)
+local BtnImportThemes   = makeConfBtn(ImportBtnContainer, "Import Themes",       btnColors.blue, 2)
+local BtnImportSettings = makeConfBtn(ImportBtnContainer, "Import Settings",     btnColors.blue, 3)
+local BtnImportFavorites= makeConfBtn(ImportBtnContainer, "Import Favorites",    btnColors.blue, 4)
 
 local function HandleImportPrompt(typeStr)
     local popup, content = CreatePopup("Import " .. typeStr, UDim2.fromOffset(320, 240))
@@ -6288,7 +5982,7 @@ local function HandleImportPrompt(typeStr)
                     State.isApplyingTheme = false
                     ApplyTheme(themeToApply)
                 else
-                    warn("7yd7 | Missing Default theme during import fallback")
+                    warn("PulpiGUI | Missing Default theme during import fallback")
                 end
             end
             if d.Settings and (typeStr == "All" or typeStr == "Settings") then
@@ -6341,7 +6035,7 @@ pcall(function()
 end)
 
 getgenv().Notify({
-    Title = '7yd7 | Emote',
+    Title = 'PulpiGUI | Emote',
     Content = '⚠️ Script loading...',
     Duration = 5
 })
@@ -6426,45 +6120,18 @@ local function urlToId(animationId)
     return animationId
 end
 
-local function saveFavorites()
-    if writefile then
-        local jsonData = HttpService:JSONEncode(State.favoriteEmotes)
-        writefile(State.favoriteFileName, jsonData)
+local function _saveFavData(data, filename) if writefile then writefile(filename, HttpService:JSONEncode(data)) end end
+local function _loadFavData(filename, stateKey)
+    if readfile and isfile and isfile(filename) then
+        local ok, r = pcall(function() return HttpService:JSONDecode(readfile(filename)) end)
+        if ok and r then State[stateKey] = r; State.favoriteSetVersion = State.favoriteSetVersion + 1 end
     end
 end
 
-local function saveFavoritesAnimations()
-    if writefile then
-        local jsonData = HttpService:JSONEncode(State.favoriteAnimations)
-        writefile(State.favoriteAnimationsFileName, jsonData)
-    end
-end
-
-local function loadFavorites()
-    if readfile and isfile and isfile(State.favoriteFileName) then
-        local success, result = pcall(function()
-            local fileContent = readfile(State.favoriteFileName)
-            return HttpService:JSONDecode(fileContent)
-        end)
-        if success and result then
-            State.favoriteEmotes = result
-            State.favoriteSetVersion = State.favoriteSetVersion + 1
-        end
-    end
-end
-
-local function loadFavoritesAnimations()
-    if readfile and isfile and isfile(State.favoriteAnimationsFileName) then
-        local success, result = pcall(function()
-            local fileContent = readfile(State.favoriteAnimationsFileName)
-            return HttpService:JSONDecode(fileContent)
-        end)
-        if success and result then
-            State.favoriteAnimations = result
-            State.favoriteSetVersion = State.favoriteSetVersion + 1
-        end
-    end
-end
+local function saveFavorites() _saveFavData(State.favoriteEmotes, State.favoriteFileName) end
+local function saveFavoritesAnimations() _saveFavData(State.favoriteAnimations, State.favoriteAnimationsFileName) end
+local function loadFavorites() _loadFavData(State.favoriteFileName, "favoriteEmotes") end
+local function loadFavoritesAnimations() _loadFavData(State.favoriteAnimationsFileName, "favoriteAnimations") end
 
 local function disconnectAllConnections()
     for _, connection in pairs(State.guiConnections) do
@@ -6500,18 +6167,16 @@ local function getEmoteName(assetId)
     end
 end
 
+local function _rebuildFavSets()
+    State.favoriteEmoteSet = {}
+    for _, f in pairs(State.favoriteEmotes) do State.favoriteEmoteSet[tostring(f.id)] = true end
+    State.favoriteAnimationSet = {}
+    for _, f in pairs(State.favoriteAnimations) do State.favoriteAnimationSet[tostring(f.id)] = true end
+    State.favoriteSetBuiltVersion = State.favoriteSetVersion
+end
+
 local function isInFavorites(assetId)
-    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then
-        State.favoriteEmoteSet = {}
-        for _, favorite in pairs(State.favoriteEmotes) do
-            State.favoriteEmoteSet[tostring(favorite.id)] = true
-        end
-        State.favoriteAnimationSet = {}
-        for _, favorite in pairs(State.favoriteAnimations) do
-            State.favoriteAnimationSet[tostring(favorite.id)] = true
-        end
-        State.favoriteSetBuiltVersion = State.favoriteSetVersion
-    end
+    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then _rebuildFavSets() end
     if State.currentMode == "animation" then
         return State.favoriteAnimationSet[tostring(assetId)] == true
     end
@@ -6522,17 +6187,7 @@ local function rebuildEmoteNormalCache()
     if State.emotePageCache.version == State.emoteCacheVersion and State.emotePageCache.favVersion == State.favoriteSetVersion then
         return
     end
-    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then
-        State.favoriteEmoteSet = {}
-        for _, favorite in pairs(State.favoriteEmotes) do
-            State.favoriteEmoteSet[tostring(favorite.id)] = true
-        end
-        State.favoriteAnimationSet = {}
-        for _, favorite in pairs(State.favoriteAnimations) do
-            State.favoriteAnimationSet[tostring(favorite.id)] = true
-        end
-        State.favoriteSetBuiltVersion = State.favoriteSetVersion
-    end
+    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then _rebuildFavSets() end
     local normal = {}
     for _, emote in ipairs(State.filteredEmotes) do
         if not State.favoriteEmoteSet[tostring(emote.id)] then
@@ -6548,17 +6203,7 @@ local function rebuildAnimationNormalCache()
     if State.animationPageCache.version == State.animationCacheVersion and State.animationPageCache.favVersion == State.favoriteSetVersion then
         return
     end
-    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then
-        State.favoriteEmoteSet = {}
-        for _, favorite in pairs(State.favoriteEmotes) do
-            State.favoriteEmoteSet[tostring(favorite.id)] = true
-        end
-        State.favoriteAnimationSet = {}
-        for _, favorite in pairs(State.favoriteAnimations) do
-            State.favoriteAnimationSet[tostring(favorite.id)] = true
-        end
-        State.favoriteSetBuiltVersion = State.favoriteSetVersion
-    end
+    if State.favoriteSetBuiltVersion ~= State.favoriteSetVersion then _rebuildFavSets() end
     local normal = {}
     for _, animation in ipairs(State.filteredAnimations) do
         if not State.favoriteAnimationSet[tostring(animation.id)] then
@@ -6857,29 +6502,9 @@ local function createGUIElements()
         return false
     end
 
-    if emotesWheel:FindFirstChild("Under") then
-        emotesWheel.Under:Destroy()
-    end
-    if emotesWheel:FindFirstChild("Top") then
-        emotesWheel.Top:Destroy()
-    end
-    if emotesWheel:FindFirstChild("EmoteWalkButton") then
-        emotesWheel.EmoteWalkButton:Destroy()
-    end
-    if emotesWheel:FindFirstChild("Favorite") then
-        emotesWheel.Favorite:Destroy()
-    end
-    if emotesWheel:FindFirstChild("SpeedEmote") then
-        emotesWheel.SpeedEmote:Destroy()
-    end
-    if emotesWheel:FindFirstChild("Changepage") then
-        emotesWheel.Changepage:Destroy()
-    end
-    if emotesWheel:FindFirstChild("SpeedBox") then
-        emotesWheel.SpeedBox:Destroy()
-    end
-    if emotesWheel:FindFirstChild("Reload") then
-        emotesWheel.Reload:Destroy()
+    for _, k in ipairs({"Under","Top","EmoteWalkButton","Favorite","SpeedEmote","Changepage","SpeedBox","Reload"}) do
+        local c = emotesWheel:FindFirstChild(k)
+        if c then c:Destroy() end
     end
 
     UI.Under = Instance.new("Frame")
@@ -7129,87 +6754,34 @@ local function updatePageDisplay()
 end
 
 
-local function toggleFavorite(emoteId, emoteName)
-    local found = false
-
-    local index = 0
-
-    for i, fav in pairs(State.favoriteEmotes) do
-        if fav.id == emoteId then
-            found = true
-            index = i
-            break
-        end
+local function _toggleFavImpl(list, itemId, itemName, entry, saveFn, updateFn)
+    local found, index = false, 0
+    for i, fav in pairs(list) do
+        if fav.id == itemId then found = true; index = i; break end
     end
-
     if found then
-        table.remove(State.favoriteEmotes, index)
-        getgenv().Notify({
-            Title = '7yd7 | Favorite System',
-            Content = '🗑️ Removed "' .. emoteName .. '" from favorites',
-            Duration = 3
-        })
+        table.remove(list, index)
+        getgenv().Notify({Title='PulpiGUI | Favorite System', Content='🗑️ Removed "'..itemName..'" from favorites', Duration=3})
     else
-        table.insert(State.favoriteEmotes, {
-            id = emoteId,
-            name = emoteName .. " - ⭐"
-        })
-        getgenv().Notify({
-            Title = '7yd7 | Favorite System',
-            Content = '✅ Added "' .. emoteName .. '" to favorites',
-            Duration = 3
-        })
+        table.insert(list, entry)
+        getgenv().Notify({Title='PulpiGUI | Favorite System', Content='✅ Added "'..itemName..'" to favorites', Duration=3})
     end
-
     State.favoriteSetVersion = State.favoriteSetVersion + 1
-    saveFavorites()
+    saveFn()
     State.totalPages = calculateTotalPages()
     updatePageDisplay()
-    updateEmotes()
+    updateFn()
     updateAllFavoriteIcons()
 end
 
+local function toggleFavorite(emoteId, emoteName)
+    _toggleFavImpl(State.favoriteEmotes, emoteId, emoteName, {id=emoteId, name=emoteName.." - ⭐"}, saveFavorites, updateEmotes)
+end
 
 local function toggleFavoriteAnimation(animationData)
-    local found = false
-
-
-    local index = 0
-
-    for i, fav in pairs(State.favoriteAnimations) do
-        if fav.id == animationData.id then
-            found = true
-            index = i
-            break
-        end
-    end
-
-    if found then
-        table.remove(State.favoriteAnimations, index)
-        getgenv().Notify({
-            Title = '7yd7 | Favorite System',
-            Content = '🗑️ Removed "' .. animationData.name .. '" from favorites',
-            Duration = 3
-        })
-    else
-        table.insert(State.favoriteAnimations, {
-            id = animationData.id,
-            name = animationData.name .. " - ⭐",
-            bundledItems = animationData.bundledItems
-        })
-        getgenv().Notify({
-            Title = '7yd7 | Favorite System',
-            Content = '✅ Added "' .. animationData.name .. '" to favorites',
-            Duration = 3
-        })
-    end
-
-    State.favoriteSetVersion = State.favoriteSetVersion + 1
-    saveFavoritesAnimations()
-    State.totalPages = calculateTotalPages()
-    updatePageDisplay()
-    updateAnimations()
-    updateAllFavoriteIcons()
+    _toggleFavImpl(State.favoriteAnimations, animationData.id, animationData.name,
+        {id=animationData.id, name=animationData.name.." - ⭐", bundledItems=animationData.bundledItems},
+        saveFavoritesAnimations, updateAnimations)
 end
 
 
@@ -7270,7 +6842,7 @@ local function applyAnimation(animationData)
     
     if not animate or not humanoid then
         getgenv().Notify({
-            Title = '7yd7 | Animation Error',
+            Title = 'PulpiGUI | Animation Error',
             Content = '❌ Animate or Humanoid not found',
             Duration = 3
         })
@@ -7284,7 +6856,7 @@ local function applyAnimation(animationData)
     
     if not bundledItems then
         getgenv().Notify({
-            Title = '7yd7 | Animation Error', 
+            Title = 'PulpiGUI | Animation Error', 
             Content = '❌ No bundled items found',
             Duration = 3
         })
@@ -7567,7 +7139,7 @@ local function fetchAllEmotes()
     updateEmotes()
     
     getgenv().Notify({
-        Title = '7yd7 | Emote',
+        Title = 'PulpiGUI | Emote',
         Content = "🎉 Loaded Successfully! Total Emotes: " .. State.totalEmotesLoaded,
         Duration = 5
     })
@@ -7615,7 +7187,7 @@ end
 local function searchEmotes(searchTerm)
     if State.isLoading then
         getgenv().Notify({
-            Title = '7yd7 | Emote',
+            Title = 'PulpiGUI | Emote',
             Content = '⚠️ Loading please wait...',
             Duration = 5
         })
@@ -7696,7 +7268,7 @@ end
 local function searchAnimations(searchTerm)
     if State.isLoading then
         getgenv().Notify({
-            Title = '7yd7 | Animation',
+            Title = 'PulpiGUI | Animation',
             Content = '⚠️ Loading please wait...',
             Duration = 5
         })
@@ -7804,6 +7376,9 @@ local function playEmote(humanoid, emoteId)
     stopCurrentEmote()
     stopEmotes()
 
+    -- Recordamos el ultimo emote reproducido para el boton Emote-Walk.
+    State.lastEmoteId = tostring(emoteId)
+
     local animation = Instance.new("Animation")
     animation.AnimationId = "rbxassetid://" .. emoteId
 
@@ -7813,16 +7388,23 @@ local function playEmote(humanoid, emoteId)
 
     if success and animTrack then
         State.currentEmoteTrack = animTrack
-        State.currentEmoteTrack.Priority = Enum.AnimationPriority.Action
+        -- Action4 = la prioridad de animacion mas alta de Roblox.
+        -- El emote SIEMPRE gana sobre las pistas de locomocion (walk/run/idle,
+        -- que el script Animate reproduce en prioridad Movement) en lugar de ser
+        -- reemplazado por ellas al moverse. Consistente con playAnimFE (Sistema A).
+        State.currentEmoteTrack.Priority = Enum.AnimationPriority.Action4
         State.currentEmoteTrack.Looped = true
         task.wait(0.1)
-        if State.speedEmoteEnabled or State.emotesWalkEnabled then
-            State.currentEmoteTrack:Play()
+        -- Reproducimos SIEMPRE. Antes estaba condicionado a que un modo estuviera
+        -- activo, asi que un emote "normal" ni siquiera arrancaba de forma persistente
+        -- y se cortaba al moverte. Action4 + Looped + peso 1 hacen que el emote gane
+        -- sobre la locomocion (walk/run/idle = Movement) y persista al caminar por defecto.
+        State.currentEmoteTrack:Play(0.1)
+        pcall(function() State.currentEmoteTrack:AdjustWeight(1, 0.1) end)
 
-            if State.speedEmoteEnabled then
-                local speedValue = tonumber(UI.SpeedBox.Text) or 1
-                State.currentEmoteTrack:AdjustSpeed(speedValue)
-            end
+        if State.speedEmoteEnabled then
+            local speedValue = tonumber(UI.SpeedBox.Text) or 1
+            State.currentEmoteTrack:AdjustSpeed(speedValue)
         end
     end
 end
@@ -7838,7 +7420,7 @@ local function onCharacterAdded(character)
     task.wait(.3)
     applyAnimation(getgenv().lastPlayedAnimation)
     getgenv().Notify({
-        Title = '7yd7 | Auto Reload Animation',
+        Title = 'PulpiGUI | Auto Reload Animation',
         Content = '🔄 The last animation was automatically \n reapplied',
         Duration = 3
     })
@@ -7847,6 +7429,12 @@ end
     animator.AnimationPlayed:Connect(function(animationTrack)
         if isDancing(character, animationTrack) then
             local playedEmoteId = urlToId(animationTrack.Animation.AnimationId)
+
+            -- Capturamos cualquier emote que se reproduzca (incluida la rueda
+            -- nativa) para que el boton Emote-Walk siempre tenga un ID que usar.
+            if playedEmoteId and playedEmoteId ~= "" and playedEmoteId ~= "0" then
+                State.lastEmoteId = playedEmoteId
+            end
 
             if State.emotesWalkEnabled then
                 if State.currentEmoteTrack then
@@ -7904,38 +7492,195 @@ end
     end)
 end
 
+-- =====================================================================
+-- EMOTE-COMO-LOCOMOCION (tecnica copiada del Eazvy Hub)
+-- ---------------------------------------------------------------------
+-- El metodo anterior (mantener una pista Action4 en loop) fallaba porque
+-- muchos juegos tienen un script Animate agresivo que corta las pistas
+-- ajenas al moverte. La tecnica robusta es NO pelear con Animate, sino
+-- reprogramarlo: sobrescribimos los AnimationId de TODOS los estados de
+-- Animate (idle/walk/run/jump/climb/fall/swim) con el ID del emote actual.
+-- Asi el propio Animate reproduce el emote al caminar, correr, saltar y
+-- caer -> nunca se corta, porque el emote ES ahora la animacion de esos
+-- estados. RefreshAnimate() fuerza a Animate a recargar los nuevos IDs.
+-- =====================================================================
+local ANIM_SLOTS = { "walk", "run", "jump", "climb", "fall", "swim", "swimidle" }
+
+local function refreshAnimate(character, humanoid)
+    local animate = character:FindFirstChild("Animate")
+    if animate then animate.Disabled = true end
+    for _, tr in ipairs(humanoid:GetPlayingAnimationTracks()) do
+        pcall(function() tr:Stop() end)
+    end
+    if animate then animate.Disabled = false end
+    -- Pulso de WalkSpeed 0 -> valor original: reactiva la maquina de estados
+    -- para que Animate re-reproduzca la animacion del estado actual.
+    local ok, s = pcall(function() return humanoid.WalkSpeed end)
+    if ok then
+        humanoid.WalkSpeed = 0
+        task.wait()
+        humanoid.WalkSpeed = s
+    end
+end
+
+local function setAnimSlot(folder, url)
+    if not folder then return end
+    local a = folder:FindFirstChildOfClass("Animation")
+    if a then a.AnimationId = url end
+end
+
+local function captureOriginalAnimateIds(animate)
+    local ids = {}
+    if animate:FindFirstChild("idle") then
+        if animate.idle:FindFirstChild("Animation1") then ids.idle1 = animate.idle.Animation1.AnimationId end
+        if animate.idle:FindFirstChild("Animation2") then ids.idle2 = animate.idle.Animation2.AnimationId end
+    end
+    if animate:FindFirstChild("pose") then
+        local a = animate.pose:FindFirstChildOfClass("Animation")
+        if a then ids.pose = a.AnimationId end
+    end
+    for _, slot in ipairs(ANIM_SLOTS) do
+        local folder = animate:FindFirstChild(slot)
+        if folder then
+            local a = folder:FindFirstChildOfClass("Animation")
+            if a then ids[slot] = a.AnimationId end
+        end
+    end
+    return ids
+end
+
+-- Aplica el emote a todos los estados de locomocion del personaje actual.
+local function applyEmoteAsLocomotion(emoteId)
+    local character = player.Character
+    if not character then return false end
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    local animate = character:FindFirstChild("Animate")
+    if not hum or not animate then return false end
+
+    local url = "rbxassetid://" .. tostring(emoteId)
+
+    -- Guardamos los IDs originales de ESTE personaje para poder restaurarlos.
+    State.originalAnimateIds = captureOriginalAnimateIds(animate)
+
+    if animate:FindFirstChild("idle") then
+        if animate.idle:FindFirstChild("Animation1") then animate.idle.Animation1.AnimationId = url end
+        if animate.idle:FindFirstChild("Animation2") then animate.idle.Animation2.AnimationId = url end
+    end
+    if animate:FindFirstChild("pose") then setAnimSlot(animate.pose, url) end
+    for _, slot in ipairs(ANIM_SLOTS) do
+        setAnimSlot(animate:FindFirstChild(slot), url)
+    end
+
+    -- Ya no necesitamos la pista Action4: Animate reproduce el emote solo.
+    stopCurrentEmote()
+    refreshAnimate(character, hum)
+    return true
+end
+
+-- Restaura los AnimationId originales (locomocion normal).
+local function restoreLocomotion()
+    local character = player.Character
+    if not character then return end
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    local animate = character:FindFirstChild("Animate")
+    if not hum or not animate then return end
+
+    local ids = State.originalAnimateIds
+    if ids then
+        if animate:FindFirstChild("idle") then
+            if animate.idle:FindFirstChild("Animation1") and ids.idle1 then animate.idle.Animation1.AnimationId = ids.idle1 end
+            if animate.idle:FindFirstChild("Animation2") and ids.idle2 then animate.idle.Animation2.AnimationId = ids.idle2 end
+        end
+        if animate:FindFirstChild("pose") and ids.pose then setAnimSlot(animate.pose, ids.pose) end
+        for _, slot in ipairs(ANIM_SLOTS) do
+            if ids[slot] then setAnimSlot(animate:FindFirstChild(slot), ids[slot]) end
+        end
+    end
+    refreshAnimate(character, hum)
+end
+
+-- Reaplica el emote-locomocion tras un respawn (nuevo personaje = Animate limpio).
+local function reapplyWalkEmoteIfActive()
+    if State.walkEmoteActive and State.walkEmoteId then
+        task.wait(0.3)
+        -- El handler de muerte apaga emotesWalkEnabled; lo resincronizamos.
+        State.emotesWalkEnabled = true
+        if UI.EmoteWalkButton then UI.EmoteWalkButton.Image = State.enabledButtonImage end
+        applyEmoteAsLocomotion(State.walkEmoteId)
+    end
+end
+
+-- Detecta el emote activo SIN depender de State.currentEmoteTrack (que a veces
+-- es nil si el emote vino de la rueda nativa o de otra ruta). Prueba 3 fuentes:
+--   1) nuestra pista de emote actual
+--   2) el ultimo emote reproducido (capturado en playEmote / AnimationPlayed)
+--   3) escaneo de las pistas activas del Humanoid buscando una de prioridad Action
+local function getActiveEmoteId()
+    if State.currentEmoteTrack and State.currentEmoteTrack.Animation then
+        local id = urlToId(State.currentEmoteTrack.Animation.AnimationId)
+        if id and id ~= "" and id ~= "0" then return id end
+    end
+    if State.lastEmoteId and State.lastEmoteId ~= "" and State.lastEmoteId ~= "0" then
+        return State.lastEmoteId
+    end
+    local character = player.Character
+    local hum = character and character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        for _, tr in ipairs(hum:GetPlayingAnimationTracks()) do
+            local ok, prio = pcall(function() return tr.Priority end)
+            if ok and tr.Animation and (
+                prio == Enum.AnimationPriority.Action or
+                prio == Enum.AnimationPriority.Action2 or
+                prio == Enum.AnimationPriority.Action3 or
+                prio == Enum.AnimationPriority.Action4) then
+                local id = urlToId(tr.Animation.AnimationId)
+                if id and id ~= "" and id ~= "0" then return id end
+            end
+        end
+    end
+    return nil
+end
+
+-- Boton Emote-Walk: usa el emote ACTUAL como caminata/salto/todo. Pulsar de
+-- nuevo lo desactiva y restaura la locomocion normal.
 local function toggleEmoteWalk()
     State.emotesWalkEnabled = not State.emotesWalkEnabled
 
     if State.emotesWalkEnabled then
-        getgenv().Notify({
-            Title = '7yd7 | Emote Freeze',
-            Content = "🔒 Emote freeze ON",
-            Duration = 5
-        })
+        -- Necesitamos un emote activo (o el ultimo usado) para copiarlo.
+        local emoteId = getActiveEmoteId()
 
+        if not emoteId or emoteId == "" or emoteId == "0" then
+            State.emotesWalkEnabled = false
+            getgenv().Notify({
+                Title = 'PulpiGUI | Emote Walk',
+                Content = "⚠ Reproduce un emote primero, luego activa este boton.",
+                Duration = 4
+            })
+            return
+        end
+
+        State.walkEmoteId = emoteId
+        State.walkEmoteActive = true
         UI.EmoteWalkButton.Image = State.enabledButtonImage
         task.wait(0.1)
-        stopCurrentEmote()
-        if State.currentEmoteTrack and State.currentEmoteTrack.IsPlaying then
-            State.currentEmoteTrack:AdjustSpeed(1)
-        end
-    else
+        local ok = applyEmoteAsLocomotion(emoteId)
         getgenv().Notify({
-            Title = '7yd7 | Emote Freeze',
-            Content = '🔓 Emote freeze OFF',
-            Duration = 5
+            Title = 'PulpiGUI | Emote Walk',
+            Content = ok and "🚶 Emote activo al caminar, correr, saltar y caer"
+                          or "❌ No se pudo aplicar (Animate/Humanoid no encontrado)",
+            Duration = 4
         })
+    else
+        State.walkEmoteActive = false
         UI.EmoteWalkButton.Image = State.defaultButtonImage
         task.wait(0.1)
-        stopCurrentEmote()
-
-        if State.currentEmoteTrack and State.currentEmoteTrack.IsPlaying and State.speedEmoteEnabled then
-            local speedValue = tonumber(UI.SpeedBox.Text) or 1
-            State.currentEmoteTrack:AdjustSpeed(speedValue)
-        elseif State.currentEmoteTrack and State.currentEmoteTrack.IsPlaying then
-            State.currentEmoteTrack:AdjustSpeed(1)
-        end
+        restoreLocomotion()
+        getgenv().Notify({
+            Title = 'PulpiGUI | Emote Walk',
+            Content = '🔓 Emote Walk OFF (locomocion normal)',
+            Duration = 4
+        })
     end
 end
 print(Players.LocalPlayer.Name)
@@ -7946,7 +7691,7 @@ local function toggleSpeedEmote()
 
     if State.speedEmoteEnabled then
         getgenv().Notify({
-            Title = '7yd7 | Speed Emote',
+            Title = 'PulpiGUI | Speed Emote',
             Content = "⚡ Speed Emote ON",
             Duration = 5
         })
@@ -7954,7 +7699,7 @@ local function toggleSpeedEmote()
         stopCurrentEmote()
     else
         getgenv().Notify({
-            Title = '7yd7 | Speed Emote',
+            Title = 'PulpiGUI | Speed Emote',
             Content = '⚡ Speed Emote OFF',
             Duration = 5
         })
@@ -7973,7 +7718,7 @@ local function toggleFavoriteMode()
     if State.favoriteEnabled then
         ApplyFavoriteButtonVisual()
         getgenv().Notify({
-            Title = '7yd7 | Favorite System',
+            Title = 'PulpiGUI | Favorite System',
             Content = "🔒 Favorite ON",
             Duration = 5
         })
@@ -7986,7 +7731,7 @@ local function toggleFavoriteMode()
     else
         ApplyFavoriteButtonVisual()
         getgenv().Notify({
-            Title = '7yd7 | Favorite System',
+            Title = 'PulpiGUI | Favorite System',
             Content = '🔓 Favorite OFF',
             Duration = 3
         })
@@ -8037,13 +7782,13 @@ local function toggleAutoReload()
     
     if getgenv().autoReloadEnabled then
         getgenv().Notify({
-            Title = '7yd7 | Auto Reload Animation',
+            Title = 'PulpiGUI | Auto Reload Animation',
             Content = "🔄 Auto Reload ON",
             Duration = 5
         })
     else
         getgenv().Notify({
-            Title = '7yd7 | Auto Reload Animation',
+            Title = 'PulpiGUI | Auto Reload Animation',
             Content = '🔄 Auto Reload OFF',
             Duration = 3
         })
@@ -8174,7 +7919,7 @@ function connectEvents()
                     end)
                     
                     getgenv().Notify({
-                        Title = '7yd7 | Animation',
+                        Title = 'PulpiGUI | Animation',
                         Content = '📄 Changed to Emote > Animation Mode',
                         Duration = 3
                     })
@@ -8192,7 +7937,7 @@ function connectEvents()
                     end
                     
                     getgenv().Notify({
-                        Title = '7yd7 | Emote', 
+                        Title = 'PulpiGUI | Emote', 
                         Content = '📄 Changed to Animation > Emote Mode',
                         Duration = 3
                     })
@@ -8355,7 +8100,7 @@ enterHUDEditor = function()
         for name, el in pairs(getMovableElements()) do
             if HUD.DefaultPositions[name] then el.Position = HUD.DefaultPositions[name] end
         end
-        getgenv().Notify({ Title = "7yd7 | HUD Editor", Content = "🔄 Positions reset to default", Duration = 3 })
+        getgenv().Notify({ Title = "PulpiGUI | HUD Editor", Content = "🔄 Positions reset to default", Duration = 3 })
     end))
 
     if UI.Search then UI.Search.TextEditable = false; UI.Search.Active = false; pcall(function() UI.Search:ReleaseFocus() end) end
@@ -8506,7 +8251,7 @@ enterHUDEditor = function()
         end))
     end
 
-    getgenv().Notify({ Title = "7yd7 | HUD Editor", Content = "✏️ Drag elements to reposition", Duration = 5 })
+    getgenv().Notify({ Title = "PulpiGUI | HUD Editor", Content = "✏️ Drag elements to reposition", Duration = 5 })
 end
 
 State.RefreshUI = function()
@@ -8557,7 +8302,11 @@ player.CharacterAdded:Connect(function(char)
     character = char
     humanoid = char:WaitForChild("Humanoid")
     onCharacterAdded(char)
-    
+
+    -- Si el Emote-Walk estaba activo, el nuevo personaje trae un Animate limpio:
+    -- reaplicamos el emote a la locomocion para que siga tras morir/reaparecer.
+    task.spawn(reapplyWalkEmoteIfActive)
+
     task.spawn(function()
         local attempts = 0
         while attempts < 20 do
@@ -8610,13 +8359,31 @@ end
 -- ★ FIX: Guard para no ejecutar si no hay track activo ni GUI
 RunService.Stepped:Connect(function()
     if not State.isGUICreated then return end
-    if humanoid and State.currentEmoteTrack and State.currentEmoteTrack.IsPlaying then
-        if humanoid.MoveDirection.Magnitude > 0 then
-            if State.speedEmoteEnabled and not State.emotesWalkEnabled then
-                State.currentEmoteTrack:Stop()
-                State.currentEmoteTrack = nil
-            end
+    local track = State.currentEmoteTrack
+    if not track then return end
+
+    -- Si Emote-Walk (tecnica Animate-slot) esta activo, el emote se reproduce via
+    -- el propio Animate; NO debemos tocar/relanzar ninguna pista aqui.
+    if State.walkEmoteActive then return end
+
+    -- Unico modo que corta el emote al moverte: "Speed Emote" SIN Freeze/Walk.
+    local speedStopMode = State.speedEmoteEnabled and not State.emotesWalkEnabled
+
+    if track.IsPlaying then
+        if speedStopMode and humanoid and humanoid.MoveDirection.Magnitude > 0 then
+            track:Stop()
+            State.currentEmoteTrack = nil
         end
+    elseif not speedStopMode then
+        -- El emote deberia estar sonando pero no lo esta: un script Animate del juego
+        -- lo corto al caminar/correr/saltar/cambiar de estado. Lo relanzamos para que
+        -- persista. Con Looped=true un emote nunca termina solo, asi que esto actua
+        -- como red de seguridad contra Animate scripts agresivos.
+        pcall(function()
+            track:Play(0.1)
+            track:AdjustWeight(1, 0.1)
+            track:AdjustSpeed(State.speedEmoteEnabled and (tonumber(UI.SpeedBox.Text) or 1) or 1)
+        end)
     end
 end)
 
@@ -8673,7 +8440,7 @@ end)
 if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
     SafeLoad("https://raw.githubusercontent.com/7yd7/Hub/refs/heads/Branch/GUIS/OpenEmote.lua", "Open Emote")
     getgenv().Notify({
-        Title = '7yd7 | Emote Mobile',
+        Title = 'PulpiGUI | Emote Mobile',
         Content = '📱 Added emote open button for ease of use',
         Duration = 10
     })
@@ -8702,7 +8469,7 @@ else
     end)
 end
 
-print("🐙 PULPI V13.5 | TITAN ANNOUNCER + CATALOG EMOTES FE + 7YD7 EMOTES LOADED")
+print("🐙 PULPI V13.5 | TITAN ANNOUNCER + CATALOG EMOTES FE + PULPI EMOTES LOADED")
 
 -- ==========================================
 -- [ PULPI CMD - COMMAND WINDOW ]
